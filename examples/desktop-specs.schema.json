@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "hostname": { "type": "string" },
+    "os": { "type": "string" },
+    "kernel": { "type": "string" },
+    "cpu": { "type": "string" },
+    "cpu_cores": { "type": "integer" },
+    "ram_gb": { "type": "number" },
+    "gpu": { "type": "string" },
+    "disk": { "type": "string" }
+  },
+  "required": ["hostname", "os", "kernel", "cpu", "cpu_cores", "ram_gb", "gpu", "disk"],
+  "additionalProperties": false
+}
