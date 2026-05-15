@@ -1,0 +1,15 @@
+[project]
+name = "evergreen"
+version = "0.1.0"
+description = "Autonomous DevOps agent powered by AI CLI skills"
+requires-python = ">=3.11"
+
+[project.scripts]
+evergreen = "evergreen.main:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+where = ["src"]
