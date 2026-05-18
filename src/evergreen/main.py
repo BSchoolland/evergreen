@@ -1,8 +1,8 @@
 import os
 import sys
 
-from evergreen.db import init_db
-from evergreen.setup import is_configured, get_cli, run_setup
+from evergreen.db import init_db, is_configured, get_cli
+from evergreen.setup import run_setup
 
 
 def launch_cli(cli: str, args: list[str], first_run: bool = False):

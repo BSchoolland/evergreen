@@ -4,6 +4,15 @@ from pathlib import Path
 
 EVERGREEN_DIR = Path.home() / ".evergreen"
 DB_PATH = EVERGREEN_DIR / "evergreen.db"
+CONFIG_PATH = EVERGREEN_DIR / "config"
+
+
+def is_configured() -> bool:
+    return CONFIG_PATH.exists()
+
+
+def get_cli() -> str:
+    return CONFIG_PATH.read_text().strip()
 
 
 def _read_schema() -> str:

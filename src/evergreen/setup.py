@@ -1,19 +1,8 @@
-from pathlib import Path
-
-CONFIG_DIR = Path.home() / ".evergreen"
-CONFIG_FILE = CONFIG_DIR / "config"
-
-
-def is_configured() -> bool:
-    return CONFIG_FILE.exists()
-
-
-def get_cli() -> str:
-    return CONFIG_FILE.read_text().strip()
+from evergreen.db import EVERGREEN_DIR, CONFIG_PATH, is_configured, get_cli
 
 
 def run_setup() -> str:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Welcome to Evergreen.\n")
     print("Which AI CLI do you want to use?")
@@ -28,6 +17,6 @@ def run_setup() -> str:
         print("Please enter 1 or 2.")
 
     cli = "codex" if choice in ("2", "codex") else "claude"
-    CONFIG_FILE.write_text(cli + "\n")
+    CONFIG_PATH.write_text(cli + "\n")
     print(f"\nSaved preference: {cli}")
     return cli
