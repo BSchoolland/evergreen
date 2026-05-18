@@ -13,9 +13,9 @@ SELECT skill, interval_minutes, enabled, last_run_at FROM cron_jobs ORDER BY ski
 If the table is empty or doesn't exist, run `python3 scripts/evergreen-server.py` briefly to initialize defaults, then stop it (it will populate the `cron_jobs` table on startup).
 
 2. Show the user the current config and explain each skill:
-   - **check-bugs**: Scans TACOS database logs for errors, anomalies, and data issues
-   - **hackernews-monitor**: Watches HN for security vulnerabilities relevant to the TACOS stack
-   - **tacos-audit**: Runs `bun audit` on TACOS dependencies and assesses real risk
+   - **check-bugs**: Scans project database logs for errors, anomalies, and data issues
+   - **hackernews-monitor**: Watches HN for security vulnerabilities relevant to the project's stack
+   - **tacos-audit**: Runs dependency audit on the project and assesses real risk
    - **triage**: Runs automatically after any of the above if new items were found (not independently scheduled)
 
 3. Ask the user what they want to change. They can:

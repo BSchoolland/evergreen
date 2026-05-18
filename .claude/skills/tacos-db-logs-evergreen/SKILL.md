@@ -1,3 +1,5 @@
-# TACOS Database Logs
+# Database Logs
 
-TACOS has a wide event system. Read the Prisma schema at `/home/ben/Projects/TACOS/prisma/schema.prisma` for the `events`, `error_logs`, `cost_events`, and `billing_events` tables. Read the event implementation in `packages/scrape-core/src/events/` for how events are structured and created. Always `\d table_name` before querying — the schema is the source of truth, not this file.
+Use `/read-config-evergreen` to get the project path.
+
+Read the project's database schema (ORM schema files, migrations, or `\dt` output) to understand the event and logging tables. Always query the live schema before assuming table or column names.

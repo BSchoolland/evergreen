@@ -1,5 +1,7 @@
 Triage `new` issues in the evergreen database (~/.evergreen/evergreen.db) across the `bugs` and `security_alerts` tables.
 
+Use `/read-config-evergreen` to get the project path, project name, and owner name.
+
 Scan all new issues, then pick what to work on this run: either the single most important issue, or a batch of low-importance ones that can be handled together. Use judgment — if something serious is in the queue, skip the noise and focus on it. Anything not picked up will be caught on subsequent runs.
 
 ## Investigation (do this before any action)
@@ -24,12 +26,11 @@ Poll for an automated review from Greptile (`gh api repos/OWNER/REPO/pulls/NUMBE
 
 ## Action tiers
 
-- **Acknowledge**: Not relevant to TACOS, informational-only. Mark status='not_actionable' (or 'not_affected' for security alerts about components TACOS doesn't use).
+- **Acknowledge**: Not relevant to the project, informational-only. Mark status='not_actionable' (or 'not_affected' for security alerts about components the project doesn't use).
 - **PR**: Small code or dependency fix. Create a branch, fix it, open a PR. Mark status='in_progress'.
 - **PR + notify**: Important code fix (production, recurring, or medium+ severity). Open PR and send Discord message. Mark status='in_progress'.
 - **Notify only**: Non-code issue (config, infra, DB). Send Discord message with diagnosis and recommendation. Mark status='in_progress'.
 
 For truly critical issues (production/staging is actively down, etc) load the /triage-critical-evergreen skill.
 
-Discord: use `python3 scripts/discord_send.py "message" --channel $DISCORD_CHANNEL_ID` to notify Ben.
-TACOS repo: /home/ben/Projects/TACOS
+Discord: use `/discord-evergreen` to notify the project owner.

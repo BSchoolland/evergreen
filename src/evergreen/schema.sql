@@ -58,3 +58,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   enabled INTEGER NOT NULL DEFAULT 1,
   last_run_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS configs (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

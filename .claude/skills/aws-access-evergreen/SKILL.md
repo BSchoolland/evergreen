@@ -1,3 +1,5 @@
-# TACOS AWS Access
+# AWS Access
 
-The `aws` CLI is configured for TACOS (us-east-1). Services used: S3 (image storage, DB backups), ECS Fargate (scrape workers), ECR (container registry), SSM Parameter Store (secrets at `/tacos/{environment}/`), CloudWatch Logs. Read `.env.example` and `scripts/` in `/home/ben/Projects/TACOS` for current bucket names, cluster names, and deployment commands.
+Use `/read-config-evergreen` to get the project name and project path.
+
+Run `aws configure list` to discover the current AWS region and profile. Read the project's `.env.example`, deploy scripts, and infrastructure config to discover bucket names, cluster names, SSM parameter paths, and other AWS resource identifiers.
