@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Record a bug to the Evergreen database. Designed to be called by Claude Code skills."""
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from evergreen.db import get_connection
+
+
+def record_bug(
+    environment,
+    error_pattern,
+    severity,
+    summary,
+    source_query=None,
+    occurrence_count=1,
+    root_cause=None,
+):
+    now = datetime.utcnow().isoformat()
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO bugs
+               (environment, error_pattern, source_query, occurrence_count,
+                first_seen_at, last_seen_at, severity, summary, root_cause)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (environment, error_pattern, source_query, occurrence_count,
+             now, now, severity, summary, root_cause),
+        )
+        conn.commit()
+        row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        print(f"Recorded bug #{row_id}: {summary}")
+        return row_id
+    finally:
+        conn.close()
+
+
+def update_bug(bug_id, **kwargs):
+    conn = get_connection()
+    try:
+        sets = []
+        vals = []
+        for key, val in kwargs.items():
+            if val is not None:
+                sets.append(f"{key} = ?")
+                vals.append(val)
+        if not sets:
+            print("Nothing to update.")
+            return
+        vals.append(bug_id)
+        conn.execute(f"UPDATE bugs SET {', '.join(sets)} WHERE id = ?", vals)
+        conn.commit()
+        print(f"Updated bug #{bug_id}")
+    finally:
+        conn.close()
+
+
+def resolve_bug(bug_id):
+    now = datetime.utcnow().isoformat()
+    update_bug(bug_id, status="resolved", resolved_at=now)
+
+
+def bump_bug(bug_id, count=1):
+    """Increment occurrence count and update last_seen_at."""
+    now = datetime.utcnow().isoformat()
+    conn = get_connection()
+    try:
+        conn.execute(
+            """UPDATE bugs SET occurrence_count = occurrence_count + ?,
+               last_seen_at = ? WHERE id = ?""",
+            (count, now, bug_id),
+        )
+        conn.commit()
+        print(f"Bumped bug #{bug_id} by {count}")
+    finally:
+        conn.close()
+
+
+def list_bugs(open_only=False, limit=20):
+    conn = get_connection()
+    where = "WHERE status != 'resolved'" if open_only else ""
+    rows = conn.execute(
+        f"""SELECT id, created_at, environment, severity, summary,
+                   error_pattern, occurrence_count, status, last_seen_at
+            FROM bugs {where} ORDER BY created_at DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    if not rows:
+        print("No bugs recorded." if not open_only else "No open bugs.")
+        return
+    for row in rows:
+        id, ts, env, sev, summary, pattern, count, status, last_seen = row
+        print(f"#{id} [{env}] [{sev}] {summary} (x{count}, last: {last_seen}) — {status}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Record bugs to Evergreen DB")
+    sub = parser.add_subparsers(dest="command")
+
+    add = sub.add_parser("add", help="Add a single bug")
+    add.add_argument("--environment", required=True, choices=["staging", "prod"])
+    add.add_argument("--error-pattern", required=True)
+    add.add_argument("--severity", required=True, choices=["critical", "high", "medium", "low"])
+    add.add_argument("--summary", required=True)
+    add.add_argument("--source-query")
+    add.add_argument("--occurrence-count", type=int, default=1)
+    add.add_argument("--root-cause")
+
+    up = sub.add_parser("update", help="Update a bug")
+    up.add_argument("id", type=int)
+    up.add_argument("--status", choices=["new", "not_actionable", "in_progress", "resolved"])
+    up.add_argument("--pr-url")
+    up.add_argument("--root-cause")
+    up.add_argument("--severity", choices=["critical", "high", "medium", "low"])
+
+    res = sub.add_parser("resolve", help="Resolve a bug")
+    res.add_argument("id", type=int)
+
+    b = sub.add_parser("bump", help="Increment occurrence count")
+    b.add_argument("id", type=int)
+    b.add_argument("--count", type=int, default=1)
+
+    ls = sub.add_parser("list", help="List bugs")
+    ls.add_argument("--open", action="store_true", help="Only show open bugs")
+    ls.add_argument("--limit", type=int, default=20)
+
+    args = parser.parse_args()
+
+    if args.command == "add":
+        record_bug(
+            environment=args.environment,
+            error_pattern=args.error_pattern,
+            severity=args.severity,
+            summary=args.summary,
+            source_query=args.source_query,
+            occurrence_count=args.occurrence_count,
+            root_cause=args.root_cause,
+        )
+    elif args.command == "update":
+        update_bug(
+            args.id,
+            status=args.status,
+            pr_url=args.pr_url,
+            root_cause=args.root_cause,
+            severity=args.severity,
+        )
+    elif args.command == "resolve":
+        resolve_bug(args.id)
+    elif args.command == "bump":
+        bump_bug(args.id, args.count)
+    elif args.command == "list":
+        list_bugs(open_only=args.open, limit=args.limit)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
