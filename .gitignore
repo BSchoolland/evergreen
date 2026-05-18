@@ -1,9 +1,29 @@
-.evergreen/
+# Python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 *.egg-info/
-.DS_Store
-/tmp/
-.env
+dist/
+build/
+
+# Node
 node_modules/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Evergreen runtime
+.evergreen/
+.claude/scheduled_tasks.lock
+
+# Misc
+/tmp/
+*.log
+*.pid
