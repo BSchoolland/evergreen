@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Evergreen cron server — runs scheduled skills via `claude -p`."""
 
+import json
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -62,6 +64,38 @@ def has_new_items() -> bool:
     return (bugs + alerts) > 0
 
 
+def extract_session_id(json_output: str) -> str | None:
+    try:
+        data = json.loads(json_output)
+        return data.get("session_id")
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def run_summary(session_id: str, run_id: int):
+    log.info("Resuming session %s for work summary", session_id)
+    cli = get_cli()
+    if cli != "claude":
+        log.info("Summary skill only supported with claude CLI, skipping")
+        return
+
+    env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
+    try:
+        subprocess.run(
+            ["claude", "-p", "/summary-of-work-evergreen",
+             "--resume", session_id, "--dangerously-skip-permissions"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        log.info("Work summary recorded for run %d", run_id)
+    except subprocess.TimeoutExpired:
+        log.warning("Summary skill timed out for run %d", run_id)
+    except Exception as e:
+        log.error("Summary skill failed for run %d: %s", run_id, e)
+
+
 def run_skill(skill: str):
     log.info("Starting skill: %s", skill)
     conn = get_connection()
@@ -80,8 +114,10 @@ def run_skill(skill: str):
 
     started = time.monotonic()
     cli = get_cli()
+    session_id = None
     if cli == "claude":
-        cmd = ["claude", "-p", f"/{skill}-evergreen", "--dangerously-skip-permissions"]
+        cmd = ["claude", "-p", f"/{skill}-evergreen",
+               "--dangerously-skip-permissions", "--output-format", "json"]
     else:
         cmd = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
                "exec", "--skip-git-repo-check", f"/{skill}-evergreen"]
@@ -97,6 +133,8 @@ def run_skill(skill: str):
         summary = f"exit={result.returncode} elapsed={elapsed:.0f}s"
         if result.returncode != 0 and result.stderr:
             summary += f" stderr={result.stderr[:200]}"
+        if cli == "claude":
+            session_id = extract_session_id(result.stdout)
         log.info("Finished skill %s: %s", skill, summary)
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - started
@@ -114,6 +152,9 @@ def run_skill(skill: str):
     )
     conn.commit()
     conn.close()
+
+    if session_id:
+        run_summary(session_id, run_id)
 
 
 def run_triage_if_needed():
@@ -167,7 +208,6 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    import os
     PID_PATH.write_text(str(os.getpid()) + "\n")
     log.info("Evergreen server started (pid %d)", os.getpid())
 
