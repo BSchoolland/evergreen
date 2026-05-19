@@ -20,14 +20,17 @@ def record_alert(
     name=None,
     affected_component=None,
     impact_assessment=None,
+    pr_url=None,
+    pr_status=None,
+    discord_message_id=None,
 ):
     conn = get_connection()
     try:
         conn.execute(
             """INSERT INTO security_alerts
-               (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment),
+               (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id),
         )
         conn.commit()
         row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -51,8 +54,8 @@ def record_batch(alerts):
             try:
                 conn.execute(
                     """INSERT INTO security_alerts
-                       (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         a["source"],
                         a.get("source_url"),
@@ -63,6 +66,9 @@ def record_batch(alerts):
                         a.get("affected_component"),
                         a["summary"],
                         a.get("impact_assessment"),
+                        a.get("pr_url"),
+                        a.get("pr_status"),
+                        a.get("discord_message_id"),
                     ),
                 )
                 inserted += 1
@@ -113,6 +119,9 @@ def main():
     add.add_argument("--name")
     add.add_argument("--affected-component")
     add.add_argument("--impact-assessment")
+    add.add_argument("--pr-url")
+    add.add_argument("--pr-status", choices=["open", "merged", "closed"])
+    add.add_argument("--discord-message-id")
 
     batch = sub.add_parser("batch", help="Add alerts from JSON file or stdin")
     batch.add_argument("file", nargs="?", default="-")
@@ -132,6 +141,9 @@ def main():
             name=args.name,
             affected_component=args.affected_component,
             impact_assessment=args.impact_assessment,
+            pr_url=args.pr_url,
+            pr_status=args.pr_status,
+            discord_message_id=args.discord_message_id,
         )
     elif args.command == "batch":
         if args.file == "-":

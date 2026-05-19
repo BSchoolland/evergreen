@@ -8,22 +8,22 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from evergreen.db import get_cli, get_connection, init_db
+from evergreen.db import epoch, get_cli, get_connection, init_db
 
 LOG_PATH = Path.home() / ".evergreen" / "server.log"
 PID_PATH = Path.home() / ".evergreen" / "server.pid"
 
-SKILLS = ["check-bugs", "hackernews-monitor", "tacos-audit"]
+SKILLS = ["check-bugs", "hackernews-monitor", "tacos-audit", "update-status"]
 
 DEFAULTS = {
     "check-bugs": 60,
     "hackernews-monitor": 360,
     "tacos-audit": 1440,
+    "update-status": 240,
 }
 
 logging.basicConfig(
@@ -64,6 +64,18 @@ def has_new_items() -> bool:
     return (bugs + alerts) > 0
 
 
+def has_in_progress_items() -> bool:
+    conn = get_connection()
+    bugs = conn.execute(
+        "SELECT COUNT(*) FROM bugs WHERE status = 'in_progress'"
+    ).fetchone()[0]
+    alerts = conn.execute(
+        "SELECT COUNT(*) FROM security_alerts WHERE status = 'in_progress'"
+    ).fetchone()[0]
+    conn.close()
+    return (bugs + alerts) > 0
+
+
 def extract_session_id(json_output: str) -> str | None:
     try:
         data = json.loads(json_output)
@@ -96,12 +108,76 @@ def run_summary(session_id: str, run_id: int):
         log.error("Summary skill failed for run %d: %s", run_id, e)
 
 
-def run_skill(skill: str):
+def enqueue(skill: str):
+    conn = get_connection()
+    already = conn.execute(
+        "SELECT 1 FROM skill_queue WHERE skill = ? AND status IN ('pending', 'running')",
+        (skill,),
+    ).fetchone()
+    if already:
+        log.info("Skill %s already queued or running, skipping", skill)
+        conn.close()
+        return
+    conn.execute("INSERT INTO skill_queue (skill) VALUES (?)", (skill,))
+    conn.commit()
+    conn.close()
+    log.info("Enqueued skill: %s", skill)
+
+
+def drain_queue():
+    conn = get_connection()
+    running = conn.execute(
+        "SELECT 1 FROM skill_queue WHERE status = 'running'"
+    ).fetchone()
+    if running:
+        conn.close()
+        return
+
+    row = conn.execute(
+        "SELECT id, skill FROM skill_queue WHERE status = 'pending' ORDER BY queued_at LIMIT 1"
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+
+    queue_id, skill = row
+
+    if skill == "update-status" and not has_in_progress_items():
+        log.info("Update-status dequeued but no in-progress items, skipping")
+        conn.execute(
+            "UPDATE skill_queue SET status = 'done' WHERE id = ?",
+            (queue_id,),
+        )
+        conn.commit()
+        conn.close()
+        return
+
+    if skill == "triage" and not has_new_items():
+        log.info("Triage dequeued but no new items, skipping")
+        conn.execute(
+            "UPDATE skill_queue SET status = 'done' WHERE id = ?",
+            (queue_id,),
+        )
+        conn.commit()
+        conn.close()
+        return
+
+    conn.execute(
+        "UPDATE skill_queue SET status = 'running', started_at = ? WHERE id = ?",
+        (epoch(), queue_id),
+    )
+    conn.commit()
+    conn.close()
+
+    run_skill(skill, queue_id)
+
+
+def run_skill(skill: str, queue_id: int):
     log.info("Starting skill: %s", skill)
     conn = get_connection()
     conn.execute(
         "UPDATE cron_jobs SET last_run_at = ? WHERE skill = ?",
-        (datetime.now(timezone.utc).isoformat(), skill),
+        (epoch(), skill),
     )
     conn.commit()
 
@@ -148,7 +224,11 @@ def run_skill(skill: str):
     conn = get_connection()
     conn.execute(
         "UPDATE runs SET finished_at = ?, summary = ? WHERE id = ?",
-        (datetime.now(timezone.utc).isoformat(), summary, run_id),
+        (epoch(), summary, run_id),
+    )
+    conn.execute(
+        "UPDATE skill_queue SET status = 'done' WHERE id = ?",
+        (queue_id,),
     )
     conn.commit()
     conn.close()
@@ -157,12 +237,8 @@ def run_skill(skill: str):
         run_summary(session_id, run_id)
 
 
-def run_triage_if_needed():
-    if has_new_items():
-        log.info("New items found, running triage")
-        run_skill("triage")
-    else:
-        log.info("No new items, skipping triage")
+def enqueue_triage():
+    enqueue("triage")
 
 
 def is_due(skill: str) -> bool:
@@ -181,21 +257,20 @@ def is_due(skill: str) -> bool:
     if not last_run_at:
         return True
 
-    last = datetime.fromisoformat(last_run_at)
-    if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last >= timedelta(minutes=interval_minutes)
+    return epoch() - last_run_at >= interval_minutes * 60
 
 
 def tick():
-    ran_any = False
+    enqueued_any = False
     for skill in SKILLS:
         if is_due(skill):
-            run_skill(skill)
-            ran_any = True
+            enqueue(skill)
+            enqueued_any = True
 
-    if ran_any:
-        run_triage_if_needed()
+    if enqueued_any:
+        enqueue_triage()
+
+    drain_queue()
 
 
 def shutdown(signum, frame):
@@ -213,6 +288,16 @@ def main():
 
     init_db()
     ensure_cron_jobs()
+
+    conn = get_connection()
+    stale = conn.execute(
+        "UPDATE skill_queue SET status = 'done' WHERE status = 'running' RETURNING skill"
+    ).fetchall()
+    if stale:
+        log.warning("Cleared stale running entries from previous crash: %s",
+                     [r[0] for r in stale])
+    conn.commit()
+    conn.close()
 
     while True:
         try:

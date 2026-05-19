@@ -5,9 +5,12 @@ import {
   getPendingOutbound,
   markSent,
   recordInbound,
+  getSentOutboundIds,
+  hasDiscordMessage,
 } from './db.js';
 
 const POLL_INTERVAL_MS = 3000;
+const REPLY_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
 let OWNER_ID = process.env.DISCORD_OWNER_ID || null;
 
@@ -35,6 +38,7 @@ client.once(Events.ClientReady, async (c) => {
   }
 
   startOutboundPoller();
+  startReplyPoller();
 });
 
 // Handle incoming messages — record replies and mentions
@@ -93,6 +97,48 @@ function startOutboundPoller() {
       }
     }
   }, POLL_INTERVAL_MS);
+}
+
+// Poll channel history for replies we may have missed (bot was offline, event dropped, etc.)
+function startReplyPoller() {
+  const poll = async () => {
+    try {
+      const channel = await client.channels.fetch(CHANNEL_ID).catch(() => null);
+      if (!channel) return;
+
+      const outboundIds = new Set(getSentOutboundIds());
+      if (outboundIds.size === 0) return;
+
+      const messages = await channel.messages.fetch({ limit: 100 });
+      let recorded = 0;
+
+      for (const msg of messages.values()) {
+        if (msg.author.bot) continue;
+        if (hasDiscordMessage(msg.id)) continue;
+
+        const replyTo = msg.reference?.messageId;
+        const isMention = msg.mentions.has(client.user);
+        if (!replyTo && !isMention) continue;
+
+        if (replyTo && outboundIds.has(replyTo)) {
+          recordInbound(msg.id, msg.channelId, msg.author.id, msg.content, replyTo);
+          recorded++;
+        } else if (isMention) {
+          recordInbound(msg.id, msg.channelId, msg.author.id, msg.content, null);
+          recorded++;
+        }
+      }
+
+      if (recorded > 0) {
+        console.log(`Reply poller: recorded ${recorded} missed message(s)`);
+      }
+    } catch (err) {
+      console.error('Reply poller error:', err.message);
+    }
+  };
+
+  poll();
+  setInterval(poll, REPLY_POLL_INTERVAL_MS);
 }
 
 client.login(process.env.DISCORD_TOKEN);

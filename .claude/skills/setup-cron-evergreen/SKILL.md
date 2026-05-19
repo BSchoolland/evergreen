@@ -16,6 +16,7 @@ If the table is empty or doesn't exist, run `python3 scripts/evergreen-server.py
    - **check-bugs**: Scans project database logs for errors, anomalies, and data issues
    - **hackernews-monitor**: Watches HN for security vulnerabilities relevant to the project's stack
    - **tacos-audit**: Runs dependency audit on the project and assesses real risk
+   - **update-status**: Syncs PR statuses, processes Discord replies, resolves completed issues (every 4h, skips if nothing is in progress)
    - **triage**: Runs automatically after any of the above if new items were found (not independently scheduled)
 
 3. Ask the user what they want to change. They can:

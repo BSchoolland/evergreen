@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evergreen</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f5f0; color: #1a2e1a; }
+
+  /* Nav bar */
+  .navbar { background: white; border-bottom: 1px solid #d4e4d4; padding: 0 32px; display: flex; align-items: center; height: 48px; }
+  .navbar-brand { font-size: 16px; font-weight: 700; color: #14532d; margin-right: 6px; }
+  .navbar-project { font-size: 12px; color: #6b7c6b; margin-right: 32px; }
+  .navbar-tabs { display: flex; height: 100%; }
+  .tab { padding: 0 16px; font-size: 13px; font-weight: 500; color: #6b7c6b; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; display: flex; align-items: center; height: 100%; }
+  .tab:hover { color: #14532d; }
+  .tab.active { color: #14532d; font-weight: 600; border-bottom-color: #16a34a; }
+
+  .content { max-width: 960px; margin: 0 auto; padding: 28px 24px; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Shared */
+  .card { background: white; border: 1px solid #d4e4d4; border-radius: 10px; overflow: hidden; }
+  .card + .card { margin-top: 16px; }
+  .section-label { font-size: 13px; font-weight: 600; color: #14532d; margin-bottom: 10px; }
+  .section + .section { margin-top: 28px; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; }
+  .pill-high { background: #fee2e2; color: #b91c1c; }
+  .pill-medium { background: #dbeafe; color: #1d4ed8; }
+  .pill-low { background: #dcfce7; color: #15803d; }
+  .pill-info { background: #f1f5f9; color: #64748b; }
+  .pill-staging { background: #e0e7ff; color: #4338ca; }
+  .pill-prod { background: #fef3c7; color: #92400e; }
+  .pill-in-progress { background: #e0f2fe; color: #0369a1; }
+  .pill-new { background: #ede9fe; color: #5b21b6; }
+  .pill-not-affected { background: #f1f5f9; color: #64748b; }
+  .pill-not-actionable { background: #f5f5f4; color: #78716c; }
+  .pill-resolved { background: #dcfce7; color: #15803d; }
+  .pill-pr { background: #dcfce7; color: #166534; }
+  .pill-pr-open { background: #dcfce7; color: #166534; }
+  .pill-pr-merged { background: #ede9fe; color: #5b21b6; }
+  .pill-pr-closed { background: #fee2e2; color: #991b1b; }
+
+  .list-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #edf4ed; }
+  .list-item:last-child { border-bottom: none; }
+  .item-icon { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  .item-body { flex: 1; min-width: 0; }
+  .item-title { font-size: 13px; font-weight: 600; color: #1a2e1a; }
+  .item-title a { color: #16a34a; text-decoration: none; }
+  .item-title a:hover { text-decoration: underline; }
+  .item-meta { font-size: 12px; color: #6b7c6b; margin-top: 3px; line-height: 1.4; }
+  .count-footer { padding: 10px 20px; font-size: 12px; color: #6b7c6b; border-top: 1px solid #edf4ed; }
+
+  /* Issues filter */
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .filter-btn { padding: 6px 14px; border-radius: 99px; font-size: 12px; font-weight: 500; border: 1px solid #d4e4d4; background: white; color: #6b7c6b; cursor: pointer; transition: all 0.15s; }
+  .filter-btn:hover { border-color: #16a34a; color: #14532d; }
+  .filter-btn.active { background: #14532d; color: white; border-color: #14532d; }
+  .filter-count { font-weight: 700; }
+
+  /* Timeline calendar */
+  .cal-wrapper { display: flex; gap: 0; height: calc(100vh - 48px - 70px - 40px); }
+  .cal-container { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .cal-title { font-size: 15px; font-weight: 600; color: #14532d; }
+  .cal-nav { display: flex; gap: 8px; }
+  .cal-nav button { background: white; border: 1px solid #d4e4d4; border-radius: 6px; padding: 4px 12px; font-size: 12px; color: #14532d; cursor: pointer; }
+  .cal-nav button:hover { background: #f0f5f0; }
+
+  .cal-grid { background: white; border: 1px solid #d4e4d4; border-radius: 10px; overflow: hidden; flex: 1; display: flex; flex-direction: column; }
+  .cal-day-headers { display: grid; grid-template-columns: 50px repeat(7, 1fr); border-bottom: 1px solid #d4e4d4; }
+  .cal-day-header { padding: 10px 8px; font-size: 11px; font-weight: 600; color: #6b7c6b; text-align: center; text-transform: uppercase; letter-spacing: 0.5px; }
+  .cal-day-header.today { color: #16a34a; }
+  .cal-day-header:first-child { border-right: 1px solid #edf4ed; }
+  .cal-body { display: grid; grid-template-columns: 50px repeat(7, 1fr); flex: 1; grid-auto-rows: 1fr; }
+  .cal-hour-label { padding: 0 8px; font-size: 10px; color: #94a3b8; text-align: right; border-right: 1px solid #edf4ed; display: flex; align-items: flex-start; justify-content: flex-end; padding-top: 4px; }
+  .cal-day-col { position: relative; border-right: 1px solid #f5faf5; border-bottom: 1px solid #f5faf5; }
+  .cal-day-col:last-child { border-right: none; }
+  .cal-day-col.today { background: #f8fcf8; }
+
+  .cal-event { position: absolute; left: 4px; right: 4px; border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 600; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: opacity 0.15s, box-shadow 0.15s; z-index: 2; border: 1px solid transparent; }
+  .cal-event:hover { opacity: 0.9; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+  .cal-event.selected { box-shadow: 0 0 0 2px #14532d; z-index: 3; }
+  .cal-event.skill-check-bugs { background: #dcfce7; color: #14532d; border-color: #bbf7d0; }
+  .cal-event.skill-triage { background: #dbeafe; color: #1e3a8a; border-color: #bfdbfe; }
+  .cal-event.skill-timeout { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+  .cal-event.skill-hackernews-monitor { background: #fef3c7; color: #78350f; border-color: #fde68a; }
+  .cal-event.skill-tacos-audit { background: #ede9fe; color: #5b21b6; border-color: #ddd6fe; }
+  .cal-event.skill-stale { background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; }
+
+  .cal-panel { width: 0; overflow: hidden; transition: width 0.2s ease; background: white; border: 1px solid #d4e4d4; border-radius: 10px; margin-left: 0; flex-shrink: 0; align-self: flex-start; max-height: 100%; overflow-y: auto; }
+  .cal-panel.open { width: 360px; margin-left: 16px; }
+  .cal-panel-inner { width: 360px; padding: 20px; }
+  .panel-close { float: right; background: none; border: none; font-size: 18px; color: #94a3b8; cursor: pointer; padding: 0 4px; }
+  .panel-close:hover { color: #1a2e1a; }
+  .panel-skill { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #6b7c6b; margin-bottom: 4px; }
+  .panel-title { font-size: 16px; font-weight: 700; color: #14532d; margin-bottom: 8px; }
+  .panel-time { font-size: 12px; color: #6b7c6b; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #edf4ed; }
+  .panel-result { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-left: 6px; }
+  .panel-result.ok { background: #dcfce7; color: #15803d; }
+  .panel-result.fail { background: #fee2e2; color: #b91c1c; }
+  .panel-summary { font-size: 13px; color: #3d5a3d; line-height: 1.7; }
+
+  .cal-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11px; color: #6b7c6b; flex-wrap: wrap; }
+  .cal-legend span { display: flex; align-items: center; gap: 4px; }
+  .cal-legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+  /* Activity / Impact */
+  .graph-container { background: white; border: 1px solid #d4e4d4; border-radius: 10px; padding: 20px 24px; }
+  .graph-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .graph-title { font-size: 14px; font-weight: 600; color: #1a2e1a; }
+  .graph-legend { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #6b7c6b; }
+  .legend-box { width: 10px; height: 10px; border-radius: 2px; }
+  .graph-with-labels { display: flex; }
+  .glabels { display: flex; flex-direction: column; gap: 3px; margin-right: 6px; font-size: 10px; color: #6b7c6b; }
+  .glabel { height: 14px; display: flex; align-items: center; }
+  .graph-grid { display: flex; gap: 3px; }
+  .graph-week { display: flex; flex-direction: column; gap: 3px; }
+  .graph-cell { width: 14px; height: 14px; border-radius: 3px; position: relative; cursor: default; }
+  .graph-cell:hover .tooltip { display: block; }
+  .tooltip { display: none; position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1a2e1a; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; }
+  .tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: #1a2e1a; }
+  .c0 { background: #edf2ed; }
+  .c1 { background: #bbf7d0; }
+  .c2 { background: #4ade80; }
+  .c3 { background: #16a34a; }
+  .c4 { background: #14532d; }
+  .graph-stats { display: flex; gap: 32px; margin-top: 16px; padding-top: 14px; border-top: 1px solid #e8f0e8; flex-wrap: wrap; }
+  .graph-stat .val { font-size: 20px; font-weight: 700; color: #14532d; }
+  .graph-stat .lbl { font-size: 11px; color: #6b7c6b; }
+
+  .metric-bar { display: flex; gap: 6px; }
+  .metric-btn { padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: 500; border: 1px solid #d4e4d4; background: white; color: #6b7c6b; cursor: pointer; transition: all 0.15s; }
+  .metric-btn:hover { border-color: #16a34a; color: #14532d; }
+  .metric-btn.active { background: #14532d; color: white; border-color: #14532d; }
+
+  .empty-state { padding: 40px; text-align: center; color: #6b7c6b; font-size: 13px; }
+
+  @media (max-width: 700px) {
+    .tabs { overflow-x: auto; }
+    .cal-panel.open { width: 300px; }
+    .cal-panel-inner { width: 300px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="navbar">
+  <span class="navbar-brand">Evergreen</span>
+  <span class="navbar-project" id="projectName"></span>
+  <div class="navbar-tabs">
+    <div class="tab active" onclick="switchTab('issues')">Issues</div>
+    <div class="tab" onclick="switchTab('timeline')">Timeline</div>
+    <div class="tab" onclick="switchTab('activity')">Activity</div>
+  </div>
+</div>
+
+<div class="tab-content active" id="tab-issues">
+  <div class="content">
+    <div class="filter-bar" id="issueFilters"></div>
+    <div id="issuesList"></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-timeline">
+  <div class="content" style="max-width:none; padding:20px 24px;">
+    <div class="cal-header">
+      <div class="cal-title" id="calTitle"></div>
+      <div class="cal-nav">
+        <button onclick="calNav(-1)">&larr; Prev</button>
+        <button onclick="calNav(0)">Today</button>
+        <button onclick="calNav(1)">Next &rarr;</button>
+      </div>
+    </div>
+    <div class="cal-wrapper">
+      <div class="cal-container">
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-legend">
+          <span><span class="cal-legend-dot" style="background:#dcfce7;"></span>check-bugs</span>
+          <span><span class="cal-legend-dot" style="background:#dbeafe;"></span>triage</span>
+          <span><span class="cal-legend-dot" style="background:#fef3c7;"></span>hackernews-monitor</span>
+          <span><span class="cal-legend-dot" style="background:#ede9fe;"></span>tacos-audit</span>
+          <span><span class="cal-legend-dot" style="background:#fee2e2;"></span>timeout/error</span>
+        </div>
+      </div>
+      <div class="cal-panel" id="calPanel">
+        <div class="cal-panel-inner" id="calPanelContent"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-activity">
+  <div class="content">
+    <div class="section" id="activityGraph"></div>
+    <div class="section" style="margin-top:28px;" id="activityPRs"></div>
+    <div class="section" style="margin-top:28px;" id="activityThreats"></div>
+  </div>
+</div>
+
+<script>
+let DATA = {};
+let calWeekOffset = 0;
+
+async function loadData() {
+  const [bugs, alerts, runs, stats, daily] = await Promise.all([
+    fetch('/api/bugs').then(r => r.json()),
+    fetch('/api/alerts').then(r => r.json()),
+    fetch('/api/runs').then(r => r.json()),
+    fetch('/api/stats').then(r => r.json()),
+    fetch('/api/daily-activity').then(r => r.json()),
+  ]);
+  DATA = { bugs, alerts, runs, stats, daily };
+  renderAll();
+}
+
+function renderAll() {
+  renderIssues();
+  renderTimeline();
+  renderActivity();
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelectorAll('.tab').forEach(t => {
+    if (t.getAttribute('onclick') === `switchTab('${name}')`) t.classList.add('active');
+  });
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function sevPill(sev) { return `<span class="pill pill-${sev}">${sev}</span>`; }
+function statusPill(s) {
+  const cls = s.replace(/_/g, '-');
+  const label = s.replace(/_/g, ' ');
+  return `<span class="pill pill-${cls}">${label}</span>`;
+}
+
+// ==================== ISSUES ====================
+let issueFilter = 'all';
+
+function renderIssues() {
+  const bugs = DATA.bugs || [];
+  const alerts = DATA.alerts || [];
+  const openBugs = bugs.filter(b => b.status !== 'resolved' && b.status !== 'not_actionable');
+  const openAlerts = alerts.filter(a => a.status === 'new' || a.status === 'in_progress');
+  const clearedAlerts = alerts.filter(a => a.status === 'not_affected' || a.status === 'not_actionable' || a.status === 'resolved');
+  const openCount = openBugs.length + openAlerts.length;
+  const clearedCount = clearedAlerts.length;
+  const allCount = bugs.length + alerts.length;
+
+  document.getElementById('issueFilters').innerHTML = `
+    <div class="filter-btn ${issueFilter==='all'?'active':''}" onclick="setFilter('all')">All <span class="filter-count">${allCount}</span></div>
+    <div class="filter-btn ${issueFilter==='open'?'active':''}" onclick="setFilter('open')">Open <span class="filter-count">${openCount}</span></div>
+    <div class="filter-btn ${issueFilter==='cleared'?'active':''}" onclick="setFilter('cleared')">Cleared <span class="filter-count">${clearedCount}</span></div>
+  `;
+
+  let html = '';
+
+  if (issueFilter !== 'cleared' && openBugs.length) {
+    html += `<div class="section"><div class="section-label">Bugs &mdash; open</div><div class="card">`;
+    for (const b of openBugs) {
+      const pr = b.pr_url ? ` <a href="${esc(b.pr_url)}" target="_blank"><span class="pill pill-pr">PR</span></a>` : '';
+      const envPill = b.environment ? `<span class="pill pill-${b.environment}">${b.environment}</span> ` : '';
+      html += `<div class="list-item">
+        <div class="item-icon" style="background:${b.severity==='medium'?'#dbeafe':'#dcfce7'}; color:${b.severity==='medium'?'#1d4ed8':'#15803d'};">B</div>
+        <div class="item-body">
+          <div class="item-title">${esc(b.summary.split('.')[0])}${pr}</div>
+          <div class="item-meta">${sevPill(b.severity)} ${envPill}${statusPill(b.status)} &bull; ${b.occurrence_count} occurrence${b.occurrence_count!==1?'s':''}</div>
+        </div></div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  if (issueFilter !== 'cleared' && openAlerts.length) {
+    html += `<div class="section"><div class="section-label">Security &mdash; needs action</div><div class="card">`;
+    for (const a of openAlerts) {
+      html += `<div class="list-item">
+        <div class="item-icon" style="background:#fee2e2; color:#b91c1c;">!</div>
+        <div class="item-body">
+          <div class="item-title">${esc(a.name || a.summary.split('.')[0])}</div>
+          <div class="item-meta">${sevPill(a.severity)} ${statusPill(a.status)} &bull; ${esc(a.affected_component||'')} &bull; ${esc(a.source)}</div>
+        </div></div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  if (issueFilter !== 'open' && clearedAlerts.length) {
+    const shown = clearedAlerts.slice(0, 8);
+    const remaining = clearedAlerts.length - shown.length;
+    html += `<div class="section"><div class="section-label">Security &mdash; cleared</div><div class="card">`;
+    for (const a of shown) {
+      const icon = a.status === 'not_affected' ? '&#10003;' : '&#8212;';
+      const bg = a.status === 'not_affected' ? '#f1f5f9' : '#f5f5f4';
+      const fg = a.status === 'not_affected' ? '#94a3b8' : '#78716c';
+      html += `<div class="list-item">
+        <div class="item-icon" style="background:${bg}; color:${fg};">${icon}</div>
+        <div class="item-body">
+          <div class="item-title">${esc(a.name || a.summary.split('.')[0])}</div>
+          <div class="item-meta">${sevPill(a.severity)} ${statusPill(a.status)} &bull; ${esc(a.affected_component||'')}</div>
+        </div></div>`;
+    }
+    if (remaining > 0) html += `<div class="count-footer">+ ${remaining} more cleared findings</div>`;
+    html += `</div></div>`;
+  }
+
+  if (!html) html = '<div class="empty-state">No issues found.</div>';
+  document.getElementById('issuesList').innerHTML = html;
+}
+
+function setFilter(f) { issueFilter = f; renderIssues(); }
+
+// ==================== TIMELINE ====================
+function getWeekStart(offset) {
+  const now = new Date();
+  const day = now.getDay();
+  const start = new Date(now);
+  start.setDate(start.getDate() - day + (offset * 7));
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+function renderTimeline() {
+  const weekStart = getWeekStart(calWeekOffset);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const today = new Date();
+  today.setHours(0,0,0,0);
+
+  document.getElementById('calTitle').textContent =
+    `${monthNames[weekStart.getMonth()]} ${weekStart.getDate()} – ${monthNames[weekEnd.getMonth()-1>=0?weekEnd.getMonth():11]} ${weekEnd.getDate()-1}, ${weekStart.getFullYear()}`;
+
+  const runs = (DATA.runs || []).filter(r => {
+    if (!r.started_at) return false;
+    const d = new Date(r.started_at * 1000);
+    return d >= weekStart && d < weekEnd;
+  });
+
+  let minHour = 23, maxHour = 0;
+  for (const r of runs) {
+    const d = new Date(r.started_at * 1000);
+    const h = d.getHours();
+    if (h < minHour) minHour = h;
+    if (h > maxHour) maxHour = h;
+    if (r.finished_at) {
+      const e = new Date(r.finished_at * 1000);
+      if (e.getHours() > maxHour) maxHour = e.getHours();
+    }
+  }
+
+  if (runs.length === 0) { minHour = 8; maxHour = 20; }
+  minHour = Math.max(0, minHour - 1);
+  maxHour = Math.min(23, maxHour + 2);
+  const hours = [];
+  for (let h = minHour; h <= maxHour; h++) hours.push(h);
+
+  let headerHtml = '<div class="cal-day-headers"><div class="cal-day-header"></div>';
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    const isToday = d.getTime() === today.getTime();
+    headerHtml += `<div class="cal-day-header${isToday?' today':''}">${dayNames[d.getDay()]} ${d.getDate()}</div>`;
+  }
+  headerHtml += '</div>';
+
+  let bodyHtml = '<div class="cal-body">';
+  for (const h of hours) {
+    const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h-12} PM`;
+    bodyHtml += `<div class="cal-hour-label">${label}</div>`;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart);
+      d.setDate(d.getDate() + i);
+      const isToday = d.getTime() === today.getTime();
+      const dayRuns = runs.filter(r => {
+        const rd = new Date(r.started_at * 1000);
+        return rd.getDate() === d.getDate() && rd.getMonth() === d.getMonth() && rd.getHours() === h;
+      });
+
+      bodyHtml += `<div class="cal-day-col${isToday?' today':''}">`;
+      dayRuns.forEach((r, idx) => {
+        const skill = r.type.replace('cron:', '');
+        const isTimeout = (r.summary || '').startsWith('TIMEOUT');
+        const isStale = !r.finished_at;
+        let cls = `skill-${skill}`;
+        if (isTimeout) cls = 'skill-timeout';
+        if (isStale) cls = 'skill-stale';
+
+        let durationMin = 5;
+        if (r.finished_at) {
+          durationMin = Math.max(3, (r.finished_at - r.started_at) / 60);
+        }
+
+        const topPct = 5 + idx * 28;
+        const heightPct = Math.min(90 - topPct, Math.max(18, durationMin * 3));
+        const label = isTimeout ? `${skill} (timeout)` : skill;
+
+        bodyHtml += `<div class="cal-event ${cls}" style="top:${topPct}%; height:${heightPct}%;"
+          onclick="showRunPanel(${r.id})" data-run="${r.id}">${label}</div>`;
+      });
+      bodyHtml += '</div>';
+    }
+  }
+  bodyHtml += '</div>';
+
+  document.getElementById('calGrid').innerHTML = headerHtml + bodyHtml;
+}
+
+function calNav(dir) {
+  if (dir === 0) calWeekOffset = 0;
+  else calWeekOffset += dir;
+  renderTimeline();
+  closePanel();
+}
+
+function showRunPanel(id) {
+  const r = DATA.runs.find(x => x.id === id);
+  if (!r) return;
+
+  document.querySelectorAll('.cal-event').forEach(e => e.classList.remove('selected'));
+  const el = document.querySelector(`.cal-event[data-run="${id}"]`);
+  if (el) el.classList.add('selected');
+
+  const skill = r.type.replace('cron:', '');
+  const isTimeout = (r.summary || '').startsWith('TIMEOUT');
+  const isStale = !r.finished_at;
+  const resultClass = isTimeout || isStale ? 'fail' : 'ok';
+  const resultLabel = isTimeout ? 'Timeout' : isStale ? 'Stale' : 'Completed';
+
+  let timeStr = formatTime(r.started_at);
+  let durationStr = '';
+  if (r.finished_at) {
+    const elapsed = r.finished_at - r.started_at;
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    durationStr = ` &bull; ${mins}m ${secs}s`;
+    timeStr += ` &ndash; ${formatTime(r.finished_at)}`;
+  }
+
+  document.getElementById('calPanelContent').innerHTML = `
+    <button class="panel-close" onclick="closePanel()">&times;</button>
+    <div class="panel-skill">${esc(skill)}</div>
+    <div class="panel-title">Run #${r.id}</div>
+    <div class="panel-time">${timeStr}${durationStr} <span class="panel-result ${resultClass}">${resultLabel}</span></div>
+    <div class="panel-summary">${esc(r.summary || 'No summary available.')}</div>
+  `;
+  document.getElementById('calPanel').classList.add('open');
+}
+
+function closePanel() {
+  document.getElementById('calPanel').classList.remove('open');
+  document.querySelectorAll('.cal-event').forEach(e => e.classList.remove('selected'));
+}
+
+function formatTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatDate(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleDateString();
+}
+
+// ==================== ACTIVITY ====================
+const METRICS = [
+  { key: 'runs', label: 'Runs', unit: 'run' },
+  { key: 'bugs', label: 'Bugs found', unit: 'bug' },
+  { key: 'prs', label: 'PRs opened', unit: 'PR' },
+  { key: 'threats', label: 'Threats assessed', unit: 'threat' },
+];
+let activeMetric = 'runs';
+
+function setMetric(key) { activeMetric = key; renderActivityGraph(); }
+
+function renderActivity() {
+  renderActivityGraph();
+
+  const bugs = DATA.bugs || [];
+  const alerts = DATA.alerts || [];
+
+  // PRs
+  const bugsWithPR = bugs.filter(b => b.pr_url);
+  if (bugsWithPR.length) {
+    const prGroups = [
+      { key: 'open', label: 'Pull requests open', icon: '#dcfce7', fg: '#16a34a' },
+      { key: 'merged', label: 'Pull requests merged', icon: '#ede9fe', fg: '#5b21b6' },
+      { key: 'closed', label: 'Pull requests closed', icon: '#fee2e2', fg: '#991b1b' },
+    ];
+    let prHtml = '';
+    for (const g of prGroups) {
+      const items = bugsWithPR.filter(b => b.pr_status === g.key);
+      if (!items.length) continue;
+      prHtml += `<div class="section-label">${g.label}</div><div class="card">`;
+      for (const b of items) {
+        const prNum = b.pr_url.split('/').pop();
+        prHtml += `<div class="list-item">
+          <div class="item-icon" style="background:${g.icon}; color:${g.fg}; font-size:11px; font-weight:700;">PR</div>
+          <div class="item-body">
+            <div class="item-title"><a href="${esc(b.pr_url)}" target="_blank">#${prNum}</a> &mdash; ${esc(b.summary.split('.')[0])}</div>
+            <div class="item-meta">${sevPill(b.severity)} <span class="pill pill-pr-${g.key}">${g.key}</span> &bull; ${formatDate(b.created_at)}</div>
+          </div></div>`;
+      }
+      prHtml += '</div>';
+      if (g.key !== prGroups[prGroups.length - 1].key) prHtml += '<div style="margin-top:16px;"></div>';
+    }
+    const unknownPRs = bugsWithPR.filter(b => !b.pr_status);
+    if (unknownPRs.length) {
+      prHtml += `<div style="margin-top:16px;"></div><div class="section-label">Pull requests (status unknown)</div><div class="card">`;
+      for (const b of unknownPRs) {
+        const prNum = b.pr_url.split('/').pop();
+        prHtml += `<div class="list-item">
+          <div class="item-icon" style="background:#f1f5f9; color:#64748b; font-size:11px; font-weight:700;">PR</div>
+          <div class="item-body">
+            <div class="item-title"><a href="${esc(b.pr_url)}" target="_blank">#${prNum}</a> &mdash; ${esc(b.summary.split('.')[0])}</div>
+            <div class="item-meta">${sevPill(b.severity)} &bull; ${formatDate(b.created_at)}</div>
+          </div></div>`;
+      }
+      prHtml += '</div>';
+    }
+    document.getElementById('activityPRs').innerHTML = prHtml;
+  }
+
+  // Threats
+  const assessed = alerts.filter(a => a.status !== 'new');
+  if (assessed.length) {
+    const shown = assessed.slice(0, 6);
+    const remaining = assessed.length - shown.length;
+    let thHtml = '<div class="section-label">Threats assessed</div><div class="card">';
+    for (const a of shown) {
+      const icon = (a.status === 'resolved' || a.status === 'in_progress') ? '&#10003;' : (a.status === 'not_affected' ? '&#10003;' : '&#8212;');
+      const bg = a.status === 'not_affected' ? '#f1f5f9' : (a.status === 'not_actionable' ? '#f5f5f4' : '#dcfce7');
+      const fg = a.status === 'not_affected' ? '#94a3b8' : (a.status === 'not_actionable' ? '#78716c' : '#16a34a');
+      thHtml += `<div class="list-item">
+        <div class="item-icon" style="background:${bg}; color:${fg};">${icon}</div>
+        <div class="item-body">
+          <div class="item-title">${esc(a.name || a.summary.split('.')[0])} &mdash; ${sevPill(a.severity)}</div>
+          <div class="item-meta">${esc(a.impact_assessment ? a.impact_assessment.split('.')[0] + '.' : '')}</div>
+        </div></div>`;
+    }
+    if (remaining > 0) thHtml += `<div class="count-footer">+ ${remaining} more threats assessed</div>`;
+    thHtml += '</div>';
+    document.getElementById('activityThreats').innerHTML = thHtml;
+  }
+}
+
+function renderActivityGraph() {
+  const stats = DATA.stats || {};
+  const daily = DATA.daily || {};
+  const metric = METRICS.find(m => m.key === activeMetric);
+  const series = daily[activeMetric] || [];
+
+  const dayMap = {};
+  for (const d of series) dayMap[d.day] = d.n;
+
+  let maxVal = 1;
+  for (const d of series) if (d.n > maxVal) maxVal = d.n;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const weeks = [];
+  const startDay = new Date(today);
+  startDay.setDate(startDay.getDate() - 83);
+  startDay.setDate(startDay.getDate() - startDay.getDay());
+
+  let current = new Date(startDay);
+  let week = [];
+  while (current <= today || week.length > 0) {
+    const key = current.toISOString().split('T')[0];
+    const val = dayMap[key] || 0;
+    let level = 0;
+    if (val > 0) level = Math.min(4, Math.ceil((val / maxVal) * 4));
+    week.push({ date: new Date(current), key, val, level });
+    if (week.length === 7) {
+      weeks.push(week);
+      week = [];
+    }
+    current.setDate(current.getDate() + 1);
+    if (current > today && week.length === 0) break;
+  }
+  if (week.length) {
+    while (week.length < 7) week.push({ date: null, key: '', val: 0, level: -1 });
+    weeks.push(week);
+  }
+
+  let metricBar = '<div class="metric-bar">';
+  for (const m of METRICS) {
+    metricBar += `<div class="metric-btn ${m.key===activeMetric?'active':''}" onclick="setMetric('${m.key}')">${m.label}</div>`;
+  }
+  metricBar += '</div>';
+
+  let graphHtml = `<div class="graph-container">
+    <div class="graph-header">
+      <div class="graph-title">${metric.label} &mdash; last 12 weeks</div>
+      <div style="display:flex; align-items:center; gap:16px;">
+        ${metricBar}
+        <div class="graph-legend">Less <div class="legend-box c0"></div><div class="legend-box c1"></div><div class="legend-box c2"></div><div class="legend-box c3"></div><div class="legend-box c4"></div> More</div>
+      </div>
+    </div>
+    <div class="graph-with-labels">
+      <div class="glabels">
+        <div class="glabel" style="visibility:hidden;">.</div>
+        <div class="glabel">Mon</div>
+        <div class="glabel" style="visibility:hidden;">.</div>
+        <div class="glabel">Wed</div>
+        <div class="glabel" style="visibility:hidden;">.</div>
+        <div class="glabel">Fri</div>
+        <div class="glabel" style="visibility:hidden;">.</div>
+      </div>
+      <div class="graph-grid">`;
+
+  for (const w of weeks) {
+    graphHtml += '<div class="graph-week">';
+    for (const d of w) {
+      if (d.level < 0) {
+        graphHtml += '<div class="graph-cell" style="visibility:hidden;"></div>';
+      } else {
+        const tip = d.val > 0 ? `${d.key} &mdash; ${d.val} ${metric.unit}${d.val!==1?'s':''}` : d.key;
+        graphHtml += `<div class="graph-cell c${d.level}"><span class="tooltip">${tip}</span></div>`;
+      }
+    }
+    graphHtml += '</div>';
+  }
+
+  graphHtml += `</div></div>
+    <div class="graph-stats">
+      <div class="graph-stat"><div class="val">${stats.total_runs||0}</div><div class="lbl">Runs</div></div>
+      <div class="graph-stat"><div class="val">${(stats.bugs_open||0) + (stats.bugs_resolved||0)}</div><div class="lbl">Bugs found</div></div>
+      <div class="graph-stat"><div class="val">${(stats.alerts_actionable||0) + (stats.alerts_cleared||0)}</div><div class="lbl">Alerts triaged</div></div>
+      <div class="graph-stat"><div class="val">${stats.prs_merged||0}</div><div class="lbl">PRs merged</div></div>
+      <div class="graph-stat"><div class="val">${stats.prs_open||0}</div><div class="lbl">PRs open</div></div>
+      <div class="graph-stat"><div class="val">${stats.prs_closed||0}</div><div class="lbl">PRs closed</div></div>
+      <div class="graph-stat"><div class="val">${stats.alerts_cleared||0}</div><div class="lbl">Threats cleared</div></div>
+    </div></div>`;
+
+  document.getElementById('activityGraph').innerHTML = graphHtml;
+}
+
+// Init
+loadData();
+</script>
+</body>
+</html>

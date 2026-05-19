@@ -16,8 +16,8 @@ db.exec(`
     author_id TEXT,
     content TEXT NOT NULL,
     reply_to_message_id TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    read_at TEXT
+    created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
+    read_at INTEGER
   );
 `);
 
@@ -63,7 +63,7 @@ export function getUnreadReplies(originalDiscordMessageId) {
 
 export function markRead(rowId) {
   db.prepare(`
-    UPDATE discord_messages SET read_at = datetime('now') WHERE id = ?
+    UPDATE discord_messages SET read_at = cast(strftime('%s', 'now') as integer) WHERE id = ?
   `).run(rowId);
 }
 
@@ -73,6 +73,20 @@ export function getUnreadInbound() {
     WHERE direction = 'inbound' AND read_at IS NULL
     ORDER BY created_at ASC
   `).all();
+}
+
+export function getSentOutboundIds(maxAgeDays = 7) {
+  const cutoff = Math.floor(Date.now() / 1000) - maxAgeDays * 86400;
+  return db.prepare(`
+    SELECT discord_message_id FROM discord_messages
+    WHERE direction = 'outbound' AND discord_message_id IS NOT NULL AND created_at > ?
+  `).all(cutoff).map(r => r.discord_message_id);
+}
+
+export function hasDiscordMessage(discordMessageId) {
+  return !!db.prepare(
+    'SELECT 1 FROM discord_messages WHERE discord_message_id = ?'
+  ).get(discordMessageId);
 }
 
 export default db;

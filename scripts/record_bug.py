@@ -4,11 +4,10 @@
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import get_connection
+from evergreen.db import epoch, get_connection
 
 
 def record_bug(
@@ -20,7 +19,7 @@ def record_bug(
     occurrence_count=1,
     root_cause=None,
 ):
-    now = datetime.utcnow().isoformat()
+    now = epoch()
     conn = get_connection()
     try:
         conn.execute(
@@ -60,13 +59,13 @@ def update_bug(bug_id, **kwargs):
 
 
 def resolve_bug(bug_id):
-    now = datetime.utcnow().isoformat()
+    now = epoch()
     update_bug(bug_id, status="resolved", resolved_at=now)
 
 
 def bump_bug(bug_id, count=1):
     """Increment occurrence count and update last_seen_at."""
-    now = datetime.utcnow().isoformat()
+    now = epoch()
     conn = get_connection()
     try:
         conn.execute(

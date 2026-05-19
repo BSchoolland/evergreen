@@ -9,6 +9,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from evergreen.db import epoch
+
 DB_PATH = Path.home() / ".evergreen" / "evergreen.db"
 BOT_DIR = Path(__file__).resolve().parent.parent / "services" / "discord-bot"
 
@@ -24,8 +27,8 @@ def get_conn():
             author_id TEXT,
             content TEXT NOT NULL,
             reply_to_message_id TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            read_at TEXT
+            created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
+            read_at INTEGER
         )
     """)
     return conn
@@ -93,7 +96,7 @@ def wait_for_reply(discord_message_id, timeout=1800):
         ).fetchall()
         if rows:
             for row in rows:
-                conn.execute("UPDATE discord_messages SET read_at = datetime('now') WHERE id = ?", (row["id"],))
+                conn.execute("UPDATE discord_messages SET read_at = ? WHERE id = ?", (epoch(), row["id"]))
             conn.commit()
             conn.close()
             reply = "\n".join(r["content"] for r in rows)
