@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Evergreen</title>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.17/index.global.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f5f0; color: #1a2e1a; }
@@ -61,38 +62,17 @@
   .filter-btn.active { background: #14532d; color: white; border-color: #14532d; }
   .filter-count { font-weight: 700; }
 
-  /* Timeline calendar */
-  .cal-wrapper { display: flex; gap: 0; height: calc(100vh - 48px - 70px - 40px); }
-  .cal-container { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-  .cal-title { font-size: 15px; font-weight: 600; color: #14532d; }
-  .cal-nav { display: flex; gap: 8px; }
-  .cal-nav button { background: white; border: 1px solid #d4e4d4; border-radius: 6px; padding: 4px 12px; font-size: 12px; color: #14532d; cursor: pointer; }
-  .cal-nav button:hover { background: #f0f5f0; }
+  /* Timeline */
+  .cal-wrapper { display: flex; gap: 16px; height: calc(100vh - 48px - 70px - 40px); }
+  .cal-container { flex: 1; min-width: 0; }
+  #fcCalendar { height: 100%; }
+  .fc .fc-timegrid-slot { height: calc((100vh - 200px) / 12); }
+  .fc .fc-event { border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .fc-direction-ltr .fc-timegrid-col-events { margin: 0 2px; }
+  .fc .fc-day-today { background: #f0fdf4 !important; }
 
-  .cal-grid { background: white; border: 1px solid #d4e4d4; border-radius: 10px; overflow: hidden; flex: 1; display: flex; flex-direction: column; }
-  .cal-day-headers { display: grid; grid-template-columns: 50px repeat(7, 1fr); border-bottom: 1px solid #d4e4d4; }
-  .cal-day-header { padding: 10px 8px; font-size: 11px; font-weight: 600; color: #6b7c6b; text-align: center; text-transform: uppercase; letter-spacing: 0.5px; }
-  .cal-day-header.today { color: #16a34a; }
-  .cal-day-header:first-child { border-right: 1px solid #edf4ed; }
-  .cal-body { display: grid; grid-template-columns: 50px repeat(7, 1fr); flex: 1; grid-auto-rows: 1fr; }
-  .cal-hour-label { padding: 0 8px; font-size: 10px; color: #94a3b8; text-align: right; border-right: 1px solid #edf4ed; display: flex; align-items: flex-start; justify-content: flex-end; padding-top: 4px; }
-  .cal-day-col { position: relative; border-right: 1px solid #f5faf5; border-bottom: 1px solid #f5faf5; }
-  .cal-day-col:last-child { border-right: none; }
-  .cal-day-col.today { background: #f8fcf8; }
-
-  .cal-event { position: absolute; left: 4px; right: 4px; border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 600; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: opacity 0.15s, box-shadow 0.15s; z-index: 2; border: 1px solid transparent; }
-  .cal-event:hover { opacity: 0.9; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
-  .cal-event.selected { box-shadow: 0 0 0 2px #14532d; z-index: 3; }
-  .cal-event.skill-check-bugs { background: #dcfce7; color: #14532d; border-color: #bbf7d0; }
-  .cal-event.skill-triage { background: #dbeafe; color: #1e3a8a; border-color: #bfdbfe; }
-  .cal-event.skill-timeout { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
-  .cal-event.skill-hackernews-monitor { background: #fef3c7; color: #78350f; border-color: #fde68a; }
-  .cal-event.skill-tacos-audit { background: #ede9fe; color: #5b21b6; border-color: #ddd6fe; }
-  .cal-event.skill-stale { background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; }
-
-  .cal-panel { width: 0; overflow: hidden; transition: width 0.2s ease; background: white; border: 1px solid #d4e4d4; border-radius: 10px; margin-left: 0; flex-shrink: 0; align-self: flex-start; max-height: 100%; overflow-y: auto; }
-  .cal-panel.open { width: 360px; margin-left: 16px; }
+  .cal-panel { width: 0; overflow: hidden; transition: width 0.2s ease; background: white; border: 1px solid #d4e4d4; border-radius: 10px; flex-shrink: 0; align-self: flex-start; max-height: 100%; overflow-y: auto; }
+  .cal-panel.open { width: 360px; }
   .cal-panel-inner { width: 360px; padding: 20px; }
   .panel-close { float: right; background: none; border: none; font-size: 18px; color: #94a3b8; cursor: pointer; padding: 0 4px; }
   .panel-close:hover { color: #1a2e1a; }
@@ -103,10 +83,6 @@
   .panel-result.ok { background: #dcfce7; color: #15803d; }
   .panel-result.fail { background: #fee2e2; color: #b91c1c; }
   .panel-summary { font-size: 13px; color: #3d5a3d; line-height: 1.7; }
-
-  .cal-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11px; color: #6b7c6b; flex-wrap: wrap; }
-  .cal-legend span { display: flex; align-items: center; gap: 4px; }
-  .cal-legend-dot { width: 10px; height: 10px; border-radius: 3px; }
 
   /* Activity / Impact */
   .graph-container { background: white; border: 1px solid #d4e4d4; border-radius: 10px; padding: 20px 24px; }
@@ -167,24 +143,9 @@
 
 <div class="tab-content" id="tab-timeline">
   <div class="content" style="max-width:none; padding:20px 24px;">
-    <div class="cal-header">
-      <div class="cal-title" id="calTitle"></div>
-      <div class="cal-nav">
-        <button onclick="calNav(-1)">&larr; Prev</button>
-        <button onclick="calNav(0)">Today</button>
-        <button onclick="calNav(1)">Next &rarr;</button>
-      </div>
-    </div>
     <div class="cal-wrapper">
       <div class="cal-container">
-        <div class="cal-grid" id="calGrid"></div>
-        <div class="cal-legend">
-          <span><span class="cal-legend-dot" style="background:#dcfce7;"></span>check-bugs</span>
-          <span><span class="cal-legend-dot" style="background:#dbeafe;"></span>triage</span>
-          <span><span class="cal-legend-dot" style="background:#fef3c7;"></span>hackernews-monitor</span>
-          <span><span class="cal-legend-dot" style="background:#ede9fe;"></span>tacos-audit</span>
-          <span><span class="cal-legend-dot" style="background:#fee2e2;"></span>timeout/error</span>
-        </div>
+        <div id="fcCalendar"></div>
       </div>
       <div class="cal-panel" id="calPanel">
         <div class="cal-panel-inner" id="calPanelContent"></div>
@@ -203,7 +164,6 @@
 
 <script>
 let DATA = {};
-let calWeekOffset = 0;
 
 async function loadData() {
   const [bugs, alerts, runs, stats, daily] = await Promise.all([
@@ -316,117 +276,77 @@ function renderIssues() {
 function setFilter(f) { issueFilter = f; renderIssues(); }
 
 // ==================== TIMELINE ====================
-function getWeekStart(offset) {
-  const now = new Date();
-  const day = now.getDay();
-  const start = new Date(now);
-  start.setDate(start.getDate() - day + (offset * 7));
-  start.setHours(0, 0, 0, 0);
-  return start;
-}
+const SKILL_COLORS = {
+  'check-bugs':        { bg: '#dcfce7', fg: '#14532d', border: '#bbf7d0' },
+  'triage':            { bg: '#dbeafe', fg: '#1e3a8a', border: '#bfdbfe' },
+  'hackernews-monitor':{ bg: '#fef3c7', fg: '#78350f', border: '#fde68a' },
+  'tacos-audit':       { bg: '#ede9fe', fg: '#5b21b6', border: '#ddd6fe' },
+  'update-status':     { bg: '#e0f2fe', fg: '#0c4a6e', border: '#bae6fd' },
+};
+const TIMEOUT_COLOR = { bg: '#fee2e2', fg: '#991b1b', border: '#fecaca' };
+const STALE_COLOR   = { bg: '#f1f5f9', fg: '#94a3b8', border: '#e2e8f0' };
+
+let fcCalendar = null;
 
 function renderTimeline() {
-  const weekStart = getWeekStart(calWeekOffset);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 7);
+  const runs = DATA.runs || [];
 
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const today = new Date();
-  today.setHours(0,0,0,0);
+  const events = runs.filter(r => r.started_at).map(r => {
+    const skill = r.type.replace('cron:', '');
+    const isTimeout = (r.summary || '').startsWith('TIMEOUT');
+    const isStale = !r.finished_at;
+    const colors = isTimeout ? TIMEOUT_COLOR : isStale ? STALE_COLOR : (SKILL_COLORS[skill] || SKILL_COLORS['check-bugs']);
+    const label = isTimeout ? `${skill} (timeout)` : skill;
 
-  document.getElementById('calTitle').textContent =
-    `${monthNames[weekStart.getMonth()]} ${weekStart.getDate()} – ${monthNames[weekEnd.getMonth()-1>=0?weekEnd.getMonth():11]} ${weekEnd.getDate()-1}, ${weekStart.getFullYear()}`;
+    const start = new Date(r.started_at * 1000);
+    let end = new Date((r.started_at + 300) * 1000);
+    if (r.finished_at) end = new Date(r.finished_at * 1000);
 
-  const runs = (DATA.runs || []).filter(r => {
-    if (!r.started_at) return false;
-    const d = new Date(r.started_at * 1000);
-    return d >= weekStart && d < weekEnd;
+    return {
+      id: String(r.id),
+      title: label,
+      start,
+      end,
+      backgroundColor: colors.bg,
+      borderColor: colors.border,
+      textColor: colors.fg,
+      extendedProps: { runId: r.id },
+    };
   });
 
-  let minHour = 23, maxHour = 0;
-  for (const r of runs) {
-    const d = new Date(r.started_at * 1000);
-    const h = d.getHours();
-    if (h < minHour) minHour = h;
-    if (h > maxHour) maxHour = h;
-    if (r.finished_at) {
-      const e = new Date(r.finished_at * 1000);
-      if (e.getHours() > maxHour) maxHour = e.getHours();
-    }
+  if (fcCalendar) {
+    fcCalendar.removeAllEvents();
+    fcCalendar.addEventSource(events);
+    return;
   }
 
-  if (runs.length === 0) { minHour = 8; maxHour = 20; }
-  minHour = Math.max(0, minHour - 1);
-  maxHour = Math.min(23, maxHour + 2);
-  const hours = [];
-  for (let h = minHour; h <= maxHour; h++) hours.push(h);
-
-  let headerHtml = '<div class="cal-day-headers"><div class="cal-day-header"></div>';
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
-    const isToday = d.getTime() === today.getTime();
-    headerHtml += `<div class="cal-day-header${isToday?' today':''}">${dayNames[d.getDay()]} ${d.getDate()}</div>`;
-  }
-  headerHtml += '</div>';
-
-  let bodyHtml = '<div class="cal-body">';
-  for (const h of hours) {
-    const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h-12} PM`;
-    bodyHtml += `<div class="cal-hour-label">${label}</div>`;
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(weekStart);
-      d.setDate(d.getDate() + i);
-      const isToday = d.getTime() === today.getTime();
-      const dayRuns = runs.filter(r => {
-        const rd = new Date(r.started_at * 1000);
-        return rd.getDate() === d.getDate() && rd.getMonth() === d.getMonth() && rd.getHours() === h;
-      });
-
-      bodyHtml += `<div class="cal-day-col${isToday?' today':''}">`;
-      dayRuns.forEach((r, idx) => {
-        const skill = r.type.replace('cron:', '');
-        const isTimeout = (r.summary || '').startsWith('TIMEOUT');
-        const isStale = !r.finished_at;
-        let cls = `skill-${skill}`;
-        if (isTimeout) cls = 'skill-timeout';
-        if (isStale) cls = 'skill-stale';
-
-        let durationMin = 5;
-        if (r.finished_at) {
-          durationMin = Math.max(3, (r.finished_at - r.started_at) / 60);
-        }
-
-        const topPct = 5 + idx * 28;
-        const heightPct = Math.min(90 - topPct, Math.max(18, durationMin * 3));
-        const label = isTimeout ? `${skill} (timeout)` : skill;
-
-        bodyHtml += `<div class="cal-event ${cls}" style="top:${topPct}%; height:${heightPct}%;"
-          onclick="showRunPanel(${r.id})" data-run="${r.id}">${label}</div>`;
-      });
-      bodyHtml += '</div>';
-    }
-  }
-  bodyHtml += '</div>';
-
-  document.getElementById('calGrid').innerHTML = headerHtml + bodyHtml;
-}
-
-function calNav(dir) {
-  if (dir === 0) calWeekOffset = 0;
-  else calWeekOffset += dir;
-  renderTimeline();
-  closePanel();
+  fcCalendar = new FullCalendar.Calendar(document.getElementById('fcCalendar'), {
+    initialView: 'timeGridWeek',
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: '',
+    },
+    slotDuration: '00:15:00',
+    slotLabelInterval: '01:00',
+    slotMinTime: '00:00:00',
+    slotMaxTime: '24:00:00',
+    allDaySlot: false,
+    nowIndicator: true,
+    scrollTime: '06:00:00',
+    expandRows: false,
+    height: '100%',
+    events,
+    eventClick(info) {
+      showRunPanel(info.event.extendedProps.runId);
+    },
+  });
+  fcCalendar.render();
 }
 
 function showRunPanel(id) {
   const r = DATA.runs.find(x => x.id === id);
   if (!r) return;
-
-  document.querySelectorAll('.cal-event').forEach(e => e.classList.remove('selected'));
-  const el = document.querySelector(`.cal-event[data-run="${id}"]`);
-  if (el) el.classList.add('selected');
 
   const skill = r.type.replace('cron:', '');
   const isTimeout = (r.summary || '').startsWith('TIMEOUT');
@@ -456,7 +376,6 @@ function showRunPanel(id) {
 
 function closePanel() {
   document.getElementById('calPanel').classList.remove('open');
-  document.querySelectorAll('.cal-event').forEach(e => e.classList.remove('selected'));
 }
 
 function formatTime(ts) {

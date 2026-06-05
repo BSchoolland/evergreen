@@ -9,11 +9,14 @@ CREATE TABLE IF NOT EXISTS bugs (
   last_seen_at INTEGER NOT NULL,
   severity TEXT NOT NULL,
   summary TEXT NOT NULL,
-  root_cause TEXT,
+  probable_root_cause TEXT,
+  verified_root_cause TEXT,
+  verification_notes TEXT,
+  verification_path TEXT,
   pr_url TEXT,
   pr_status TEXT CHECK(pr_status IN ('open', 'merged', 'closed')),
   discord_message_id TEXT,
-  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'not_actionable', 'in_progress', 'resolved')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'verified', 'unverified', 'blocked', 'not_actionable', 'in_progress', 'resolved', 'dismissed')),
   resolved_at INTEGER
 );
 
@@ -32,7 +35,7 @@ CREATE TABLE IF NOT EXISTS security_alerts (
   pr_url TEXT,
   pr_status TEXT CHECK(pr_status IN ('open', 'merged', 'closed')),
   discord_message_id TEXT,
-  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'not_affected', 'not_actionable', 'in_progress', 'resolved')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'not_affected', 'not_actionable', 'in_progress', 'resolved', 'dismissed')),
   resolved_at INTEGER,
   UNIQUE(source, cve, source_url)
 );

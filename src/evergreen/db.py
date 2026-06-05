@@ -116,12 +116,38 @@ def _migrate_text_timestamps(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_verify_bug(conn: sqlite3.Connection):
+    """Add verification columns, rename root_cause, and update status CHECK."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bugs)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols or "root_cause" not in cols:
+        return
+    conn.execute("ALTER TABLE bugs RENAME TO _old_bugs")
+    schema = _read_schema()
+    for line in schema.split(";"):
+        if "CREATE TABLE IF NOT EXISTS bugs" in line:
+            conn.execute(line + ";")
+            break
+    old_cols = [r[1] for r in conn.execute("PRAGMA table_info(_old_bugs)").fetchall()]
+    new_cols = [r[1] for r in conn.execute("PRAGMA table_info(bugs)").fetchall()]
+    col_map = {c: c for c in old_cols if c in new_cols}
+    col_map["root_cause"] = "probable_root_cause"
+    src = ", ".join(col_map.keys())
+    dst = ", ".join(col_map.values())
+    conn.execute(f"INSERT INTO bugs ({dst}) SELECT {src} FROM _old_bugs")
+    conn.execute("DROP TABLE _old_bugs")
+    conn.commit()
+
+
 def init_db() -> sqlite3.Connection:
     EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     _migrate_text_timestamps(conn)
+    _migrate_verify_bug(conn)
     conn.executescript(_read_schema())
     conn.commit()
     return conn

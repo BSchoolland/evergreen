@@ -10,4 +10,6 @@ Process:
 4. If no response and you are confident in the fix: act. You MUST have a rollback plan before making any change. Log every action taken to the `runs` table.
 5. If unsure about the fix even after investigation: do not act. Send a follow-up Discord message and wait.
 
+If your fix takes the form of a PR, it must carry the `evergreen` GitHub label like every other evergreen PR (see triage-evergreen) — create the label if it doesn't exist, then `gh pr create --label evergreen ...`.
+
 Record all actions, reasoning, and rollback steps in the database. Err on the side of not acting.

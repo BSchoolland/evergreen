@@ -17,7 +17,7 @@ def record_bug(
     summary,
     source_query=None,
     occurrence_count=1,
-    root_cause=None,
+    probable_root_cause=None,
 ):
     now = epoch()
     conn = get_connection()
@@ -25,10 +25,10 @@ def record_bug(
         conn.execute(
             """INSERT INTO bugs
                (environment, error_pattern, source_query, occurrence_count,
-                first_seen_at, last_seen_at, severity, summary, root_cause)
+                first_seen_at, last_seen_at, severity, summary, probable_root_cause)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (environment, error_pattern, source_query, occurrence_count,
-             now, now, severity, summary, root_cause),
+             now, now, severity, summary, probable_root_cause),
         )
         conn.commit()
         row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -79,9 +79,14 @@ def bump_bug(bug_id, count=1):
         conn.close()
 
 
-def list_bugs(open_only=False, limit=20):
+def list_bugs(open_only=False, dismissed_only=False, limit=20):
     conn = get_connection()
-    where = "WHERE status != 'resolved'" if open_only else ""
+    if dismissed_only:
+        where = "WHERE status = 'dismissed'"
+    elif open_only:
+        where = "WHERE status NOT IN ('resolved', 'dismissed')"
+    else:
+        where = ""
     rows = conn.execute(
         f"""SELECT id, created_at, environment, severity, summary,
                    error_pattern, occurrence_count, status, last_seen_at
@@ -108,13 +113,13 @@ def main():
     add.add_argument("--summary", required=True)
     add.add_argument("--source-query")
     add.add_argument("--occurrence-count", type=int, default=1)
-    add.add_argument("--root-cause")
+    add.add_argument("--probable-root-cause")
 
     up = sub.add_parser("update", help="Update a bug")
     up.add_argument("id", type=int)
-    up.add_argument("--status", choices=["new", "not_actionable", "in_progress", "resolved"])
+    up.add_argument("--status", choices=["new", "verified", "unverified", "blocked", "not_actionable", "in_progress", "resolved", "dismissed"])
     up.add_argument("--pr-url")
-    up.add_argument("--root-cause")
+    up.add_argument("--probable-root-cause")
     up.add_argument("--severity", choices=["critical", "high", "medium", "low"])
 
     res = sub.add_parser("resolve", help="Resolve a bug")
@@ -126,6 +131,7 @@ def main():
 
     ls = sub.add_parser("list", help="List bugs")
     ls.add_argument("--open", action="store_true", help="Only show open bugs")
+    ls.add_argument("--dismissed", action="store_true", help="Only show dismissed bugs")
     ls.add_argument("--limit", type=int, default=20)
 
     args = parser.parse_args()
@@ -138,14 +144,14 @@ def main():
             summary=args.summary,
             source_query=args.source_query,
             occurrence_count=args.occurrence_count,
-            root_cause=args.root_cause,
+            probable_root_cause=args.probable_root_cause,
         )
     elif args.command == "update":
         update_bug(
             args.id,
             status=args.status,
             pr_url=args.pr_url,
-            root_cause=args.root_cause,
+            probable_root_cause=args.probable_root_cause,
             severity=args.severity,
         )
     elif args.command == "resolve":
@@ -153,7 +159,7 @@ def main():
     elif args.command == "bump":
         bump_bug(args.id, args.count)
     elif args.command == "list":
-        list_bugs(open_only=args.open, limit=args.limit)
+        list_bugs(open_only=args.open, dismissed_only=args.dismissed, limit=args.limit)
     else:
         parser.print_help()
 

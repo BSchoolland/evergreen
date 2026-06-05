@@ -17,7 +17,8 @@ If the table is empty or doesn't exist, run `python3 scripts/evergreen-server.py
    - **hackernews-monitor**: Watches HN for security vulnerabilities relevant to the project's stack
    - **tacos-audit**: Runs dependency audit on the project and assesses real risk
    - **update-status**: Syncs PR statuses, processes Discord replies, resolves completed issues (every 4h, skips if nothing is in progress)
-   - **triage**: Runs automatically after any of the above if new items were found (not independently scheduled)
+   - **verify-bug**: Runs automatically after detection skills if new bugs were found. Attempts to reproduce and confirm the root cause before triage acts on it. (not independently scheduled)
+   - **triage**: Runs automatically after verify-bug. Only opens PRs for verified bugs; unverified bugs get notify-only. Security alerts are triaged directly. (not independently scheduled)
 
 3. Ask the user what they want to change. They can:
    - Enable/disable specific skills
@@ -40,4 +41,4 @@ Tell the user how to manage the server:
 - Status: `bash scripts/server.sh status`
 - Logs: `tail -f ~/.evergreen/server.log`
 
-The server checks every 60 seconds whether any skill is due, runs it via `claude -p`, and then runs triage if new bugs or security alerts were recorded. Triage is skipped if nothing new is in the database — it costs zero tokens when there's nothing to do.
+The server checks every 60 seconds whether any skill is due, runs it via `claude -p`, then runs verify-bug (if new bugs exist) followed by triage (if verified/unverified bugs or new security alerts exist). Both are skipped if there's nothing to process — they cost zero tokens when there's nothing to do.

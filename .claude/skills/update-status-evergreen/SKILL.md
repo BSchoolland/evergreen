@@ -27,7 +27,7 @@ Update `pr_status` in the database to match (`open`, `merged`, `closed`).
 ## 3. Update issue status based on PR state
 
 - **PR merged**: Mark the issue `resolved` and set `resolved_at` to now.
-- **PR closed (not merged)**: Investigate — check if the fix landed via another PR or commit. If the issue is actually fixed, mark `resolved`. If not, clear the `pr_url`/`pr_status` so it shows up as needing work again.
+- **PR closed (not merged)**: The owner reviewed and rejected the fix. Mark the issue `dismissed` — this means "not a real issue" or "not worth fixing." Do not clear the PR link or reopen the issue.
 - **PR open**: Leave as `in_progress`. Optionally check for review comments or CI failures and note them in the summary.
 
 ## 4. Check for Discord replies
@@ -45,9 +45,9 @@ For each reply, find the bug(s) or security alert(s) with a matching `discord_me
 
 When the owner says "issue" or "create an issue", they generally mean a row in the evergreen database (`bugs` or `security_alerts` table), not a GitHub issue, unless otherwise specified.
 
-- If the reply gives fix guidance, update the issue's `root_cause` field or note it.
+- If the reply gives fix guidance, update the issue's `probable_root_cause` field or note it.
 - If the reply asks to create/update an issue, create or update the relevant row in the `bugs` or `security_alerts` table.
-- If the reply says to close/ignore, mark the issue accordingly.
+- If the reply says to close, ignore, or dismiss, mark the issue `dismissed`.
 - If the reply is ambiguous, leave it for the next triage run and don't mark it read.
 
 After acting on a reply, **acknowledge it** by sending a short Discord response via `/discord-evergreen` confirming what you did (e.g., "Done — updated bugs #1 and #2 with tracing guidance, will work on logging improvements."). Use `--no-wait` since you don't need to wait for a reply to the acknowledgment.
