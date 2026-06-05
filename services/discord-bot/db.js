@@ -89,4 +89,50 @@ export function hasDiscordMessage(discordMessageId) {
   ).get(discordMessageId);
 }
 
+// --- Config (shared configs table) ---
+
+export function getConfig(key, fallback = null) {
+  const row = db.prepare('SELECT value FROM configs WHERE key = ?').get(key);
+  return row ? row.value : fallback;
+}
+
+// --- Conversations (interactive dev: Discord thread <-> pi session) ---
+
+export function getConversation(threadId) {
+  return db.prepare('SELECT * FROM conversations WHERE thread_id = ?').get(threadId);
+}
+
+export function upsertConversation(threadId, channelId, sessionId, sessionFile, seed = {}) {
+  db.prepare(`
+    INSERT INTO conversations (thread_id, channel_id, session_id, session_file, status, seed_issue_type, seed_issue_id)
+    VALUES (@thread_id, @channel_id, @session_id, @session_file, 'active', @seed_issue_type, @seed_issue_id)
+    ON CONFLICT(thread_id) DO UPDATE SET
+      status = 'active',
+      session_file = excluded.session_file,
+      last_activity_at = cast(strftime('%s', 'now') as integer)
+  `).run({
+    thread_id: threadId,
+    channel_id: channelId,
+    session_id: sessionId,
+    session_file: sessionFile,
+    seed_issue_type: seed.type ?? null,
+    seed_issue_id: seed.id ?? null,
+  });
+  return getConversation(threadId);
+}
+
+export function setConversationStatus(threadId, status) {
+  db.prepare('UPDATE conversations SET status = ? WHERE thread_id = ?').run(status, threadId);
+}
+
+export function setConversationSessionFile(threadId, sessionFile) {
+  db.prepare('UPDATE conversations SET session_file = ? WHERE thread_id = ?').run(sessionFile, threadId);
+}
+
+export function touchConversation(threadId) {
+  db.prepare(
+    "UPDATE conversations SET last_activity_at = cast(strftime('%s', 'now') as integer) WHERE thread_id = ?"
+  ).run(threadId);
+}
+
 export default db;

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Evergreen cron server — runs scheduled skills via `claude -p`."""
+"""Evergreen cron server — runs scheduled skills via the configured engine.
+
+The engine is read from ~/.evergreen/config (get_cli): "pi" (default going
+forward), "claude", or "codex". This is the *watchdog* dev: it runs in its own
+clone of the target repo (the `project_path` config / EVERGREEN_PROJECT_PATH),
+separate from the interactive dev's clone, so the two never collide on git state.
+"""
 
 import json
 import logging
@@ -10,12 +16,14 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
 
-from evergreen.db import epoch, get_cli, get_connection, init_db
+from evergreen.db import epoch, get_cli, get_config, get_connection, get_project_path, init_db
 
 LOG_PATH = Path.home() / ".evergreen" / "server.log"
 PID_PATH = Path.home() / ".evergreen" / "server.pid"
+SYNC_SKILLS_SCRIPT = REPO / "scripts" / "sync-pi-skills.py"
 
 # Detection skills run on a schedule. verify-bug and triage are triggered
 # after detection, not independently scheduled.
@@ -181,13 +189,24 @@ def maybe_requeue_verify():
 
 # --- Skill execution ---
 
-def reset_project_branch():
-    conn = get_connection()
-    row = conn.execute("SELECT value FROM configs WHERE key = 'project_path'").fetchone()
-    conn.close()
-    if not row:
+def sync_pi_skills():
+    """Regenerate .pi/skills from .claude/skills so pi sees fresh evergreen skills."""
+    if get_cli() != "pi" or not SYNC_SKILLS_SCRIPT.exists():
         return
-    project_path = row[0]
+    try:
+        subprocess.run([sys.executable, str(SYNC_SKILLS_SCRIPT)],
+                       capture_output=True, text=True, timeout=60, cwd=str(REPO))
+        log.info("Synced pi skills")
+    except Exception as e:
+        log.warning("Failed to sync pi skills: %s", e)
+
+
+def reset_project_branch():
+    # The watchdog server has no EVERGREEN_PROJECT_PATH in its own env, so this
+    # resolves to the `project_path` config — the watchdog's clone (clone A).
+    project_path = get_project_path()
+    if not project_path:
+        return
     try:
         subprocess.run(
             ["git", "checkout", "master"],
@@ -222,9 +241,24 @@ def run_skill(skill: str, queue_id: int):
     started = time.monotonic()
     cli = get_cli()
     session_id = None
+    session_dir = None
+    run_cwd = None
+    run_env = None
     if cli == "claude":
         cmd = ["claude", "-p", f"/{skill}-evergreen",
                "--dangerously-skip-permissions", "--output-format", "json"]
+    elif cli == "pi":
+        # Run from the evergreen repo so pi discovers .pi/skills; point the agent
+        # at the watchdog's clone via EVERGREEN_PROJECT_PATH. A per-run session-dir
+        # lets the summary step resume this exact session with --continue.
+        session_dir = REPO / ".pi" / "sessions" / "watchdog" / f"run-{run_id}"
+        cmd = ["pi", "-p", "--session-dir", str(session_dir)]
+        model = get_config("pi_model")
+        if model:
+            cmd += ["--model", model]
+        cmd += [f"/skill:{skill}-evergreen"]
+        run_cwd = str(REPO)
+        run_env = {**os.environ, "EVERGREEN_PROJECT_PATH": get_project_path() or ""}
     else:
         cmd = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
                "exec", "--skip-git-repo-check", f"/{skill}-evergreen"]
@@ -235,6 +269,8 @@ def run_skill(skill: str, queue_id: int):
             capture_output=True,
             text=True,
             timeout=3600,
+            cwd=run_cwd,
+            env=run_env,
         )
         elapsed = time.monotonic() - started
         summary = f"exit={result.returncode} elapsed={elapsed:.0f}s"
@@ -260,8 +296,10 @@ def run_skill(skill: str, queue_id: int):
     conn.commit()
     conn.close()
 
-    if session_id:
-        run_summary(session_id, run_id)
+    if cli == "claude" and session_id:
+        run_summary(run_id, session_id=session_id)
+    elif cli == "pi" and session_dir:
+        run_summary(run_id, session_dir=session_dir)
 
     deploy_lakebed()
 
@@ -274,23 +312,29 @@ def extract_session_id(json_output: str) -> str | None:
         return None
 
 
-def run_summary(session_id: str, run_id: int):
-    log.info("Resuming session %s for work summary", session_id)
+def run_summary(run_id: int, session_id: str = None, session_dir: Path = None):
+    """Resume the just-finished agent session to record what it did this run."""
     cli = get_cli()
-    if cli != "claude":
-        log.info("Summary skill only supported with claude CLI, skipping")
-        return
-
     env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
     try:
-        subprocess.run(
-            ["claude", "-p", "/summary-of-work-evergreen",
-             "--resume", session_id, "--dangerously-skip-permissions"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=env,
-        )
+        if cli == "claude" and session_id:
+            log.info("Resuming claude session %s for work summary", session_id)
+            cmd = ["claude", "-p", "/summary-of-work-evergreen",
+                   "--resume", session_id, "--dangerously-skip-permissions"]
+            cwd = None
+        elif cli == "pi" and session_dir:
+            log.info("Resuming pi session in %s for work summary", session_dir)
+            env["EVERGREEN_PROJECT_PATH"] = get_project_path() or ""
+            cmd = ["pi", "-p", "--session-dir", str(session_dir), "--continue"]
+            model = get_config("pi_model")
+            if model:
+                cmd += ["--model", model]
+            cmd += ["/skill:summary-of-work-evergreen"]
+            cwd = str(REPO)
+        else:
+            log.info("No resumable session for run %d, skipping summary", run_id)
+            return
+        subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env, cwd=cwd)
         log.info("Work summary recorded for run %d", run_id)
     except subprocess.TimeoutExpired:
         log.warning("Summary skill timed out for run %d", run_id)
@@ -380,6 +424,7 @@ def main():
 
     init_db()
     ensure_cron_jobs()
+    sync_pi_skills()
 
     conn = get_connection()
     stale = conn.execute(

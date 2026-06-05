@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import time
 from importlib.resources import files
@@ -160,3 +161,37 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+# --- Config helpers ---
+
+def get_config(key: str, default: str | None = None) -> str | None:
+    conn = get_connection()
+    row = conn.execute("SELECT value FROM configs WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else default
+
+
+def set_config(key: str, value: str) -> None:
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO configs (key, value) VALUES (?, ?)",
+        (key, str(value)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_project_path() -> str | None:
+    """Resolve the target-repo path for the *current actor*.
+
+    Evergreen runs as two "devs" that share this machine and DB but never share a
+    working tree: the watchdog uses the `project_path` clone, the interactive dev
+    uses the `project_path_interactive` clone. Each actor sets EVERGREEN_PROJECT_PATH
+    in its environment to point at its own clone; that env var overrides the configs
+    value. With no env override, falls back to the `project_path` config (watchdog).
+    """
+    env = os.environ.get("EVERGREEN_PROJECT_PATH")
+    if env:
+        return env
+    return get_config("project_path")

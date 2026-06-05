@@ -79,3 +79,18 @@ CREATE TABLE IF NOT EXISTS configs (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Interactive conversations: each Discord thread maps to one persistent pi session.
+-- The "interactive dev" works in its own clone of the target repo (project_path_interactive);
+-- the watchdog works in project_path. They share this DB but never share a working tree.
+CREATE TABLE IF NOT EXISTS conversations (
+  thread_id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_file TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'idle', 'closed')),
+  seed_issue_type TEXT CHECK(seed_issue_type IN ('bug', 'security_alert')),
+  seed_issue_id INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
+  last_activity_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer))
+);

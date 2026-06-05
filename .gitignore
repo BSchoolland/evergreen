@@ -23,6 +23,11 @@ Thumbs.db
 .evergreen/
 .claude/scheduled_tasks.lock
 
+# pi skills are generated from .claude/skills by scripts/sync-pi-skills.py
+/.pi/skills/
+# pi conversation session files for the interactive dev
+/.pi/sessions/
+
 # Misc
 /tmp/
 *.log
