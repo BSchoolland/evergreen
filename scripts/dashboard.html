@@ -53,6 +53,14 @@
   .item-title a { color: #16a34a; text-decoration: none; }
   .item-title a:hover { text-decoration: underline; }
   .item-meta { font-size: 12px; color: #6b7c6b; margin-top: 3px; line-height: 1.4; }
+  .caret { display: inline-block; font-size: 9px; color: #9bab9b; transition: transform 0.15s; }
+  .caret.open { transform: rotate(90deg); }
+  .bug-detail { margin-top: 10px; padding: 10px 12px; background: #f6faf6; border: 1px solid #e3ede3; border-radius: 8px; }
+  .detail-field { margin-top: 10px; }
+  .detail-field:first-child { margin-top: 0; }
+  .detail-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #8a9a8a; }
+  .detail-value { font-size: 12px; color: #344334; margin-top: 2px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .detail-value.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #56654f; }
   .count-footer { padding: 10px 20px; font-size: 12px; color: #6b7c6b; border-top: 1px solid #edf4ed; }
 
   /* Issues filter */
@@ -211,6 +219,18 @@ function statusPill(s) {
 
 // ==================== ISSUES ====================
 let issueFilter = 'all';
+const expandedBugs = new Set();
+
+function toggleBug(id) {
+  if (expandedBugs.has(id)) expandedBugs.delete(id); else expandedBugs.add(id);
+  renderIssues();
+}
+
+function bugDetailField(label, value, mono) {
+  if (!value) return '';
+  return `<div class="detail-field"><div class="detail-label">${label}</div>`
+    + `<div class="detail-value${mono ? ' mono' : ''}">${esc(value)}</div></div>`;
+}
 
 function renderIssues() {
   const bugs = DATA.bugs || [];
@@ -235,11 +255,27 @@ function renderIssues() {
     for (const b of openBugs) {
       const pr = b.pr_url ? ` <a href="${esc(b.pr_url)}" target="_blank"><span class="pill pill-pr">PR</span></a>` : '';
       const envPill = b.environment ? `<span class="pill pill-${b.environment}">${b.environment}</span> ` : '';
+      const title = b.summary.split('.')[0];
+      const extraSummary = b.summary.trim().replace(/\.$/, '') !== title.trim() ? b.summary : null;
+      const hasDetail = extraSummary || b.error_pattern || b.source_query || b.probable_root_cause
+        || b.verified_root_cause || b.verification_notes || b.disposition_reason;
+      const isOpen = expandedBugs.has(b.id);
+      const caret = hasDetail ? `<span class="caret${isOpen?' open':''}">&#9654;</span> ` : '';
+      const detail = isOpen ? `<div class="bug-detail">`
+        + bugDetailField('Summary', extraSummary)
+        + bugDetailField('Error pattern', b.error_pattern, true)
+        + bugDetailField('Verified root cause', b.verified_root_cause)
+        + bugDetailField('Probable root cause', b.probable_root_cause)
+        + bugDetailField('Verification notes', b.verification_notes)
+        + bugDetailField('Source query', b.source_query, true)
+        + bugDetailField('Disposition', b.disposition_reason)
+        + `</div>` : '';
       html += `<div class="list-item">
         <div class="item-icon" style="background:${b.severity==='medium'?'#dbeafe':'#dcfce7'}; color:${b.severity==='medium'?'#1d4ed8':'#15803d'};">B</div>
         <div class="item-body">
-          <div class="item-title">${esc(b.summary.split('.')[0])}${pr}</div>
-          <div class="item-meta">${sevPill(b.severity)} ${envPill}${statusPill(b.status)} &bull; ${b.occurrence_count} occurrence${b.occurrence_count!==1?'s':''}</div>
+          <div class="item-title"${hasDetail?` onclick="toggleBug(${b.id})" style="cursor:pointer"`:''}>${caret}${esc(title)}${pr}</div>
+          <div class="item-meta">${sevPill(b.severity)} ${envPill}${statusPill(b.status)} &bull; ${b.occurrence_count} occurrence${b.occurrence_count!==1?'s':''} &bull; added ${timeAgo(b.first_seen_at)}${b.last_seen_at && b.last_seen_at !== b.first_seen_at ? ` &bull; last seen ${timeAgo(b.last_seen_at)}` : ''}</div>
+          ${detail}
         </div></div>`;
     }
     html += `</div></div>`;
@@ -480,6 +516,19 @@ function formatTime(ts) {
 function formatDate(ts) {
   const d = new Date(ts * 1000);
   return d.toLocaleDateString();
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const secs = Math.floor(Date.now() / 1000 - ts);
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return formatDate(ts);
 }
 
 // ==================== ACTIVITY ====================

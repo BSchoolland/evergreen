@@ -81,6 +81,50 @@ def resolve_model(skill: str):
     thinking = get_config(f"thinking:{skill}") or cfg.get("thinking")
     return model, thinking
 
+
+# Per-skill model + effort for the *claude* engine — the cost tiering above,
+# translated to Claude. Heavy skills (verify-bug, triage) fall through to the
+# claude default (Opus / high); light/mechanical skills run on Sonnet at the same
+# effort the pi mapping used, and the work summary runs on Haiku.
+# Models use bare aliases ("opus"/"sonnet"/"haiku") so each always resolves to the
+# latest of that tier — new model drops are picked up with no code change.
+# Mapping requested 2026-06-22: gpt-5.5/xhigh -> opus/high; gpt-5.4-mini -> sonnet
+# (same effort); summary-of-work -> haiku/low (claude has no "minimal").
+CLAUDE_DEFAULT_MODEL = "opus"
+CLAUDE_DEFAULT_EFFORT = "high"
+CLAUDE_SKILL_MODELS = {
+    "summary-of-work": {"model": "haiku", "effort": "low"},
+    "update-status": {"model": "sonnet", "effort": "low"},
+    "tacos-audit": {"model": "sonnet", "effort": "medium"},
+    "hackernews-monitor": {"model": "sonnet", "effort": "medium"},
+    "check-bugs": {"model": "sonnet", "effort": "medium"},
+    # verify-bug, triage: inherit the claude default (opus / high).
+}
+
+
+def resolve_model_claude(skill: str):
+    """Return (model, effort) for a skill on the claude engine. Resolution order
+    (first non-empty wins):
+      1. config table:  claude_model:<skill> / claude_effort:<skill>
+      2. CLAUDE_SKILL_MODELS
+      3. config table:  claude_model / claude_effort   (global overrides)
+      4. CLAUDE_DEFAULT_MODEL / CLAUDE_DEFAULT_EFFORT
+    """
+    cfg = CLAUDE_SKILL_MODELS.get(skill, {})
+    model = (
+        get_config(f"claude_model:{skill}")
+        or cfg.get("model")
+        or get_config("claude_model")
+        or CLAUDE_DEFAULT_MODEL
+    )
+    effort = (
+        get_config(f"claude_effort:{skill}")
+        or cfg.get("effort")
+        or get_config("claude_effort")
+        or CLAUDE_DEFAULT_EFFORT
+    )
+    return model, effort
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -300,11 +344,15 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
     session_id = None
     session_dir = None
     claude_stdout = None
+    claude_model = None
+    claude_effort = None
     run_cwd = None
     run_env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
     if cli == "claude":
+        claude_model, claude_effort = resolve_model_claude(skill)
         cmd = ["claude", "-p", f"/{skill}-evergreen",
-               "--dangerously-skip-permissions", "--output-format", "json"]
+               "--dangerously-skip-permissions", "--output-format", "json",
+               "--model", claude_model, "--effort", claude_effort]
     elif cli == "pi":
         # Run from the evergreen repo so pi discovers .pi/skills; point the agent
         # at the watchdog's clone via EVERGREEN_PROJECT_PATH. A per-run session-dir
@@ -359,7 +407,7 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
 
     if cli == "claude" and session_id:
         run_summary(run_id, session_id=session_id)
-        record_run_cost_claude(run_id, claude_stdout)
+        record_run_cost_claude(run_id, claude_stdout, model=claude_model, effort=claude_effort)
     elif cli == "pi" and session_dir:
         run_summary(run_id, session_dir=session_dir)
         # Record cost AFTER the summary step so the run total includes it.
@@ -387,9 +435,10 @@ def record_run_cost(run_id: int, session_dir: Path):
     log.info("Run %d: $%.4f, %d tokens, %s/%s", run_id, cost or 0, tokens or 0, model, effort)
 
 
-def record_run_cost_claude(run_id: int, json_output: str):
-    """Record cost/tokens/model from `claude -p --output-format json` so cost
-    tracking works on the claude engine, not just pi. Mirrors record_run_cost."""
+def record_run_cost_claude(run_id: int, json_output: str, model: str = None, effort: str = None):
+    """Record cost/tokens/model/effort from `claude -p --output-format json` so cost
+    tracking works on the claude engine, not just pi. Mirrors record_run_cost.
+    The resolved model/effort (what we asked for) take precedence over the JSON."""
     if not json_output:
         return
     try:
@@ -401,13 +450,13 @@ def record_run_cost_claude(run_id: int, json_output: str):
     tokens = None
     if isinstance(usage, dict):
         tokens = sum(v for v in usage.values() if isinstance(v, int)) or None
-    model = data.get("model")
+    model = model or data.get("model")
     if cost is None and tokens is None and model is None:
         return
     conn = get_connection()
     conn.execute(
         "UPDATE runs SET cost = ?, tokens = ?, model = ?, effort = ? WHERE id = ?",
-        (cost, tokens, model, None, run_id),
+        (cost, tokens, model, effort, run_id),
     )
     conn.commit()
     conn.close()
@@ -429,8 +478,10 @@ def run_summary(run_id: int, session_id: str = None, session_dir: Path = None):
     try:
         if cli == "claude" and session_id:
             log.info("Resuming claude session %s for work summary", session_id)
+            sm_model, sm_effort = resolve_model_claude("summary-of-work")
             cmd = ["claude", "-p", "/summary-of-work-evergreen",
-                   "--resume", session_id, "--dangerously-skip-permissions"]
+                   "--resume", session_id, "--dangerously-skip-permissions",
+                   "--model", sm_model, "--effort", sm_effort]
             cwd = None
         elif cli == "pi" and session_dir:
             log.info("Resuming pi session in %s for work summary", session_dir)

@@ -27,8 +27,9 @@ def query_db(sql, params=()):
 
 def get_bugs():
     return query_db(
-        "SELECT id, created_at, environment, error_pattern, severity, summary, "
-        "probable_root_cause, pr_url, pr_status, discord_message_id, status, occurrence_count, first_seen_at, last_seen_at "
+        "SELECT id, created_at, environment, error_pattern, source_query, severity, summary, "
+        "probable_root_cause, verified_root_cause, verification_notes, disposition_reason, "
+        "pr_url, pr_status, discord_message_id, status, occurrence_count, first_seen_at, last_seen_at "
         "FROM bugs ORDER BY created_at DESC"
     )
 
