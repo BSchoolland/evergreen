@@ -26,8 +26,10 @@ Pick one `new` bug per run. If multiple are queued, pick the highest severity.
 
 7. **Update the bug record** — set `verification_notes` to a 3-sentence summary: what you tried, what you observed, whether it matches the claimed root cause. Set `verification_path` to the folder path.
 
-8. **Set status**:
-   - `verified` — reproduced and root cause confirmed. Or: the claimed root cause was wrong, but you found and confirmed the real bug. Set `verified_root_cause` to the confirmed cause (which may differ from `probable_root_cause`).
-   - `unverified` — couldn't reproduce, or evidence doesn't support the claimed cause. Triage can notify-only at most.
-   - `dismissed` — evidence actively disproves the bug (e.g., the "anomaly" is actually expected behavior, or the issue was already fixed).
+8. **Set status.** `verified` licenses triage to write a code fix, so only use it when the confirmed cause is a code defect you can name at a specific `file:line`. If the proven cause is outside the code with no code fix, mark `unverified` — reproducing the symptom is not a code-level cause.
+   - `verified` — reproduced and root cause confirmed. Or: the claimed root cause was wrong, but you found and confirmed the real bug. Set `verified_root_cause` to the confirmed cause (which may differ from `probable_root_cause`); state only what you actually proved — if one example stands in for a class, or part of the cause is still unconfirmed, say so explicitly rather than generalizing it into a clean cause.
+   - `unverified` — couldn't reproduce, evidence doesn't support the claimed cause, or the proven cause is an infra transient with no code fix. Triage can notify-only at most.
+   - `dismissed` — evidence actively disproves the bug (e.g., the "anomaly" is actually expected behavior, or the issue was already fixed). Record what disproved it in `--disposition-reason` with `--dismissed-by verify`.
    - `blocked` — you genuinely cannot run the experiment because you lack access (after actually trying). Notify the owner via `/discord-evergreen` explaining exactly what access you need. Do not ask for access you already have.
+
+9. **Notify if it's worth interrupting the owner.** When you mark a bug `verified`, send a Discord heads-up (`/discord-evergreen`) with the confirmed root cause and last-occurrence time for things that genuinely warrant attention now — an active outage, ongoing harm such as a runaway loop burning API spend that won't stop on its own (staging included), data loss or corruption, or a serious regression. Lesser verified bugs flow to triage.

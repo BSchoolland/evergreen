@@ -14,7 +14,9 @@ Do NOT file for style preferences, potential improvements, or things working cor
 
 For each finding, cite specific log entry IDs/timestamps. Read the project codebase to confirm before recording. Record bugs with `python3 scripts/record_bug.py`.
 
-**Active outage → escalate immediately, don't just record it.** If a finding is an active-outage signature — a burst of real failures occurring in real time or still inside the last few hours of the query window (e.g. hundreds of failure events that production is still inside of or only just exited), not a stale one-off — send a Discord heads-up immediately (`/discord-evergreen`) with the diagnosis and last-occurrence time, *in addition to* recording it for the normal verify/triage flow. The owner may need to remediate (top up billing, restart, roll back) while the fix is worked. Don't wait for verify-bug or triage to run. See the triage skill's "Notification judgment" and memory note on this.
+Once you've localized a finding to specific code, check that code's recent git history in the project repo (`git log`/`git log -p` on the relevant files, plus open PRs via `gh pr list`). A commit or deploy near the bug's first or last occurrence often explains it — a change that introduced it, or one that already fixed it (in which case mark it resolved rather than recording). A recent commit or open PR touching that code may mean someone is already on it — note that on the bug instead of treating it as new.
+
+Record an active outage or ongoing harm (e.g. a runaway loop burning API spend) as **high** severity so verify-bug picks it up first.
 
 Before recording new bugs, check existing bugs (`python3 scripts/record_bug.py list --open`) and update occurrence counts rather than creating duplicates. If a previously recorded bug no longer appears in the logs, mark it resolved.
 

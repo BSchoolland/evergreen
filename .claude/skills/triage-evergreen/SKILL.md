@@ -2,7 +2,7 @@ Triage issues in the evergreen database (~/.evergreen/evergreen.db) across the `
 
 Use `/read-config-evergreen` to get the project path, project name, and owner name.
 
-Scan triageable issues: `verified` bugs and `new` security alerts. Pick what to work on this run: either the single most important issue, or a batch of low-importance ones that can be handled together. Use judgment — if something serious is in the queue, skip the noise and focus on it. Anything not picked up will be caught on subsequent runs.
+Scan triageable issues: `verified` and `action_needed` bugs, and `new` security alerts. Pick what to work on this run: either the single most important issue, or a batch of low-importance ones that can be handled together. Use judgment — if something serious is in the queue, skip the noise and focus on it. Anything not picked up will be caught on subsequent runs.
 
 Also scan `unverified` bugs — these can only be handled as notify-only (no PRs). Batch-notify if there are several, or skip if they're low importance.
 
@@ -13,11 +13,19 @@ For **verified bugs**: the verify-bug skill has already confirmed the root cause
 - Read the relevant source code thoroughly. Understand the full context: callers, error handling paths, tests, related modules.
 - Check recent commits and open/merged PRs in the repo for keywords from the bug's error pattern. If someone may have already fixed the issue since the last occurrence, note that in your assessment and do not open a duplicate PR — acknowledge it or notify with what you found instead.
 - For code changes: read every function in the call chain that your change affects. Understand what happens upstream and downstream of your edit.
-- If the issue has multiple root causes (e.g., code + config + infra), identify all of them. Don't fix one and hand-wave the rest.
+- If the issue has multiple root causes (e.g., code + config + infra), identify all of them. Fix only the ones you've actually confirmed; for any cause you can't prove, say so and leave it rather than shipping a speculative fix.
+
+For **action_needed bugs**: the owner asked for a specific follow-up, recorded in `disposition_reason`. If it came from a closed PR (`pr_url`), read that PR first — its diff, the owner's close comment, and any review findings — to see what was rejected and why. Then do what they asked, honoring their guidance whether it's a fix to build or a pitfall to avoid. That's usually a new PR with the smallest fix that respects it, but follow `disposition_reason` if they wanted something else.
 
 For **security alerts**: verify independently as before — read source code, check if the project actually uses the affected component, assess real impact.
 
+Prefer the smallest change that fixes what you've proven. If the evidence shows only *that* something failed but not reliably *why* (the cause is gone from logs, or one example is standing in for a class), make the next occurrence diagnosable instead of guessing — a minimal observability/reporting change you can be sure of beats a larger behavioral fix you're hoping is right.
+
+Before writing a *behavioral* fix, state the causal chain in one sentence: *`<cause at file:line>` causes `<symptom>`; `<this change>` fixes it because `<mechanism>`.* If you can't complete it with a real mechanism, don't ship a speculative behavioral change — notify, or open a small observability/logging PR so the next occurrence is diagnosable.
+
 ## Before opening a PR
+
+Read [merge-patterns.md](merge-patterns.md) — an analysis of past evergreen PRs and why the owner merged or closed each. It distills what separates merged from rejected PRs (root cause at the right layer, smallest sufficient fix, proven-live bug, additive field semantics, code-PR vs. Discord-alert). Use it to sanity-check your plan before you build.
 
 - Create a fresh branch off of `origin/master` (fetch first) so the PR is clean and doesn't carry unrelated changes.
 - **Every evergreen PR must carry the `evergreen` GitHub label** so the owner can spot at a glance that it came from evergreen. The label may not exist in the target repo yet, so ensure it exists first, then apply it when you open the PR:
@@ -29,22 +37,24 @@ For **security alerts**: verify independently as before — read source code, ch
 - Verify the fix handles edge cases and doesn't break existing behavior.
 - Read existing tests. Run them. Write new tests if the changed behavior isn't covered.
 - Typecheck passing is necessary but not sufficient — think about runtime behavior.
-- **Prove the fix**: re-run the reproduction from the verification folder after applying your fix. The PR must include before/after evidence showing the issue is resolved. If you can't demonstrate the fix works, don't open a PR — notify instead.
+- **Prove the fix**: re-run the actual reproduction from the verification folder and show real before/after evidence the failing records now succeed. Mocked tests that assert your new code path is *called* don't count — if you can't re-run the real reproduction, notify instead of opening a PR.
 - If you're not confident the fix is correct, don't open a PR. Notify instead and explain what you found.
 
 ## PR descriptions
 
-The owner gets multiple triage PRs per day and will close any they can't verify in 5–10 minutes. Every PR must include:
+The owner gets multiple triage PRs per day and will close any he can't verify in 5–10 minutes. Write the body the way an engineer explains a bug to a colleague: open with the problem — the symptom, its impact, and the root cause shown at `file:line` with the offending code — then the fix and the insight behind it. Lead with what's wrong, not a changelog of what you changed.
 
-- **Reproduction steps**: concrete commands, URLs, or DB queries to see the issue firsthand.
+Every PR must include:
+
+- **Reproduction** the owner can run on his own machine — a query or command against the live system, with the real failing data inline. Don't send him to files in evergreen's verification folder; he can't reach this machine.
 - **Frequency and recency**: how often it's happening and when it last occurred.
-- **Verification evidence**: reference the verification folder and summarize what verify-bug proved. Include the before/after results showing the fix resolves the issue.
+- **Before/after evidence** that the fix resolves it.
 
-If you can't provide a clear path for the owner to see the problem themselves, the PR isn't ready.
+If you can't give him a clear path to see the problem firsthand, the PR isn't ready.
 
 ## After opening a PR
 
-Run `/code-review high`. Evaluate each finding and fix any that are valid — push follow-up commits to the same branch. Re-run tests and typecheck after fixes. Repeat the review until it surfaces no new valid findings or you've done 3 review cycles.
+Review the branch: `python3 scripts/review-branch.py --dir <project path> --branch <your branch>` (run from the evergreen repo). It runs pi review agents over the diff vs `origin/master` and prints their findings. Evaluate each, fix any that are valid — push follow-up commits to the same branch — then re-run tests and typecheck. Repeat until the review surfaces no new valid findings or you've done 3 cycles.
 
 **Do not send the PR-ready Discord notification until after the review cycle is complete.** The PR should be in good shape before you ping anyone *about the PR*. (Exception: an active-outage heads-up — see Notification judgment — goes out immediately when the outage is detected and is never delayed for the review or for PR prep. That is a separate message from the later "here's the PR" ping.)
 
