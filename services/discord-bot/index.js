@@ -81,7 +81,11 @@ client.on(Events.MessageCreate, async (message) => {
 
   // 2) Owner @mentions the bot in the main channel (fresh, not a reply) → start a conversation thread.
   if (interactive && isOwner && !inThread && message.mentions.has(client.user) && !message.reference?.messageId) {
-    const seed = message.content.replace(/<@!?\d+>/g, '').trim();
+    const seed = message.content
+      .replace(/<@!?\d+>/g, '')
+      .replace(/<@&\d+>/g, '')
+      .replace(/<#\d+>/g, '')
+      .trim();
     try { await interactive.startConversation(message, seed); } catch (err) { console.error('startConversation:', err); }
     return;
   }
@@ -112,7 +116,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 // Poll the DB for outbound messages queued by skills/scripts
 function startOutboundPoller() {
+  let busy = false; // prevent overlapping ticks from sending the same row twice
   setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
     const pending = getPendingOutbound();
     if (pending.length === 0) return;
 
@@ -142,6 +150,9 @@ function startOutboundPoller() {
       } catch (err) {
         console.error(`Failed to send message #${msg.id}:`, err.message);
       }
+    }
+    } finally {
+      busy = false;
     }
   }, POLL_INTERVAL_MS);
 }

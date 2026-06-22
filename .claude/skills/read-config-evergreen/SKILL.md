@@ -13,6 +13,8 @@ Available config keys:
 - `ssh_staging` — SSH alias for the staging server
 - `ssh_prod` — SSH alias for the production server
 - `discord_channel_id` — Discord channel ID for notifications
+- `discord_model` — Optional `provider/model` for Discord interactive Pi sessions (falls back to `pi_model`, then pi default)
+- `discord_thinking` — Optional Pi thinking level for Discord interactive Pi sessions
 - `owner_name` — Name of the person to notify
 - `pi_model` — Optional `provider/model` for pi (e.g. `anthropic/claude-opus-4-5`); unset = pi default
 

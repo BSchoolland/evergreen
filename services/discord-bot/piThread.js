@@ -23,18 +23,20 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../'
  *   idle, exit(code)
  */
 export class PiThread extends EventEmitter {
-  constructor(threadId, { sessionDir, projectPath, model, idleMs = 30 * 60 * 1000 }) {
+  constructor(threadId, { sessionDir, projectPath, model, thinking, idleMs = 30 * 60 * 1000 }) {
     super();
     this.threadId = threadId;
     this.sessionDir = sessionDir;
     this.projectPath = projectPath;
     this.model = model || null;
+    this.thinking = thinking || null;
     this.idleMs = idleMs;
     this.child = null;
     this.buffer = '';
     this.decoder = new StringDecoder('utf8');
     this.streaming = false;
     this._idleTimer = null;
+    this._expectedExitReason = null;
   }
 
   get alive() {
@@ -59,13 +61,13 @@ export class PiThread extends EventEmitter {
     const args = ['--mode', 'rpc', '--session-dir', this.sessionDir];
     if (this._hasExistingSession()) args.push('--continue');
     if (this.model) args.push('--model', this.model);
+    if (this.thinking) args.push('--thinking', this.thinking);
 
     this.child = spawn('pi', args, {
       cwd: REPO,
       env: {
         ...process.env,
         EVERGREEN_PROJECT_PATH: this.projectPath || '',
-        EVERGREEN_INTERACTIVE: '1', // enables the approval-gate extension
       },
     });
     this.buffer = '';
@@ -75,11 +77,13 @@ export class PiThread extends EventEmitter {
       const msg = d.toString().trim();
       if (msg) console.error(`[pi ${this.threadId}] ${msg}`);
     });
-    this.child.on('exit', (code) => {
+    this.child.on('exit', (code, signal) => {
+      const expectedExitReason = this._expectedExitReason;
+      this._expectedExitReason = null;
       this.streaming = false;
       this.child = null;
       this._clearIdle();
-      this.emit('exit', code);
+      this.emit('exit', code, { signal, expectedExitReason });
     });
     this._resetIdle();
   }
@@ -177,6 +181,7 @@ export class PiThread extends EventEmitter {
 
   _evict() {
     if (this.alive) {
+      this._expectedExitReason = 'idle';
       try { this.child.stdin.end(); } catch {}
       try { this.child.kill('SIGTERM'); } catch {}
     }
@@ -186,6 +191,7 @@ export class PiThread extends EventEmitter {
   shutdown() {
     this._clearIdle();
     if (this.alive) {
+      this._expectedExitReason = 'shutdown';
       try { this.child.kill('SIGTERM'); } catch {}
     }
   }

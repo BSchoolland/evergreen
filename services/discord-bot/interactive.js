@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../'
 const SESSIONS_ROOT = path.join(REPO, '.pi', 'sessions', 'threads');
 const EDIT_THROTTLE_MS = 900;
 const MAX_LEN = 1900; // headroom under Discord's 2000-char limit
+const THREAD_TITLE_MODEL = 'openai-codex/gpt-5.4-mini';
+const THREAD_TITLE_THINKING = 'low';
+const THREAD_TITLE_TIMEOUT_MS = 90_000;
+const MAX_THREAD_NAME_LEN = 90;
 
 function chunkText(text) {
   const chunks = [];
@@ -26,6 +31,81 @@ function chunkText(text) {
   }
   chunks.push(rest);
   return chunks;
+}
+
+function trimThreadName(name) {
+  const cleaned = String(name || '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/^[\s"'`*_~#:-]+|[\s"'`*_~#:-]+$/g, '')
+    .replace(/^title\s*[:\-]\s*/i, '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return 'New request';
+  if (cleaned.length <= MAX_THREAD_NAME_LEN) return cleaned;
+  const shortened = cleaned.slice(0, MAX_THREAD_NAME_LEN).replace(/\s+\S*$/, '').trim();
+  return shortened || cleaned.slice(0, MAX_THREAD_NAME_LEN).trim();
+}
+
+function cleanSeedText(seedText) {
+  return String(seedText || '')
+    .replace(/<@!?\d+>/g, '')     // user/bot mentions
+    .replace(/<@&\d+>/g, '')      // role mentions
+    .replace(/<#\d+>/g, '')       // channel mentions
+    .replace(/<a?:\w+:\d+>/g, '') // custom emoji
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function fallbackThreadName(seedText) {
+  return trimThreadName(cleanSeedText(seedText) || 'New request');
+}
+
+async function generateThreadName(seedText) {
+  const cleanedSeed = cleanSeedText(seedText);
+  const fallback = fallbackThreadName(cleanedSeed);
+  if (!cleanedSeed) return fallback;
+
+  const prompt = `Create a concise Discord thread title for this user message.\n\nRules:\n- Return only the title; no quotes, markdown, or explanation.\n- Maximum 8 words and 60 characters.\n- Base it on the user's actual request.\n\nUser message:\n${cleanedSeed.slice(0, 4000)}`;
+
+  return new Promise((resolve) => {
+    const args = [
+      '--no-tools',
+      '--no-session',
+      '--no-context-files',
+      '--no-skills',
+      '--no-extensions',
+      '--model', THREAD_TITLE_MODEL,
+      '--thinking', THREAD_TITLE_THINKING,
+      '--mode', 'text',
+      '-p', prompt,
+    ];
+    const child = spawn('pi', args, { cwd: REPO, env: process.env });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const finish = (name, err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) console.error(`Thread title generation failed: ${err}`);
+      resolve(trimThreadName(name) || fallback);
+    };
+
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch {}
+      finish(fallback, 'timed out');
+    }, THREAD_TITLE_TIMEOUT_MS);
+
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', (err) => finish(fallback, err.message));
+    child.on('exit', (code) => {
+      if (code === 0 && stdout.trim()) finish(stdout.trim());
+      else finish(fallback, stderr.trim() || `exit code ${code}`);
+    });
+  });
 }
 
 /** Streams growing assistant text into one-or-more Discord messages, throttled. */
@@ -97,10 +177,11 @@ export class InteractiveManager {
     pt = new PiThread(threadId, {
       sessionDir: path.join(SESSIONS_ROOT, threadId),
       projectPath: this._projectPath(),
-      model: getConfig('pi_model') || null,
+      model: getConfig('discord_model') || getConfig('pi_model') || null,
+      thinking: getConfig('discord_thinking') || null,
     });
     this.threads.set(threadId, pt);
-    this.render.set(threadId, { channel, stream: null, statusMsg: null, typing: null });
+    this.render.set(threadId, { channel, stream: null, statusMsg: null, statusLines: [], statusQueue: null, typing: null });
     this._wire(pt, threadId);
     return pt;
   }
@@ -109,18 +190,47 @@ export class InteractiveManager {
     return this.render.get(threadId);
   }
 
-  async _setStatus(threadId, text) {
+  _formatTool(toolName, args) {
+    const a = args || {};
+    let detail = '';
+    switch (toolName) {
+      case 'bash': detail = a.command || ''; break;
+      case 'read': case 'edit': case 'write': case 'ls': detail = a.path || a.file || ''; break;
+      case 'grep': detail = a.pattern || ''; break;
+      case 'find': detail = a.pattern || a.glob || a.query || ''; break;
+      default: detail = Object.values(a).find((v) => typeof v === 'string') || '';
+    }
+    detail = String(detail).replace(/\s+/g, ' ').trim();
+    if (detail.length > 250) detail = detail.slice(0, 250) + '…';
+    return detail ? `🔧 \`${toolName}\` ${detail}` : `🔧 \`${toolName}\``;
+  }
+
+  // Append a tool line to the per-turn status message (one message, edited in
+  // place, deleted at end of turn). Serialized via a promise chain so rapid tool
+  // calls can't race into separate orphaned messages. Keeps the most recent lines
+  // and drops the oldest with a leading "…" when it would exceed one message.
+  _pushStatus(threadId, line) {
     const st = this._state(threadId);
     if (!st) return;
-    try {
-      if (!text) {
-        if (st.statusMsg) { await st.statusMsg.delete().catch(() => {}); st.statusMsg = null; }
-      } else if (st.statusMsg) {
-        await st.statusMsg.edit(text).catch(() => {});
-      } else {
-        st.statusMsg = await st.channel.send(text).catch(() => null);
-      }
-    } catch {}
+    st.statusLines.push(line);
+    let content = st.statusLines.join('\n');
+    if (content.length > 1900) content = '…\n' + content.slice(content.length - 1897);
+    st.statusQueue = (st.statusQueue || Promise.resolve()).then(async () => {
+      try {
+        if (st.statusMsg) await st.statusMsg.edit(content);
+        else st.statusMsg = await st.channel.send(content);
+      } catch {}
+    });
+  }
+
+  async _clearStatus(threadId) {
+    const st = this._state(threadId);
+    if (!st) return;
+    st.statusQueue = (st.statusQueue || Promise.resolve()).then(async () => {
+      if (st.statusMsg) { try { await st.statusMsg.delete(); } catch {} st.statusMsg = null; }
+    });
+    await st.statusQueue;
+    st.statusLines = [];
   }
 
   _startTyping(threadId) {
@@ -139,7 +249,7 @@ export class InteractiveManager {
   _wire(pt, threadId) {
     pt.on('agentStart', () => {
       const st = this._state(threadId);
-      if (st) st.stream = null;
+      if (st) { st.stream = null; st.statusLines = []; st.statusMsg = null; st.statusQueue = null; }
       this._startTyping(threadId);
     });
     pt.on('textStart', () => {
@@ -154,13 +264,13 @@ export class InteractiveManager {
       const st = this._state(threadId);
       if (st?.stream) { await st.stream.finalize(); st.stream = null; }
     });
-    pt.on('toolStart', ({ toolName }) => {
-      this._setStatus(threadId, `🔧 \`${toolName}\`…`);
+    pt.on('toolStart', ({ toolName, args }) => {
+      this._pushStatus(threadId, this._formatTool(toolName, args));
     });
     pt.on('toolEnd', ({ toolName, isError }) => {
-      if (isError) this._setStatus(threadId, `⚠️ \`${toolName}\` errored`);
+      if (isError) this._pushStatus(threadId, `⚠️ \`${toolName}\` errored`);
     });
-    pt.on('status', (msg) => this._setStatus(threadId, `⏳ ${msg}`));
+    pt.on('status', (msg) => this._pushStatus(threadId, `⏳ ${msg}`));
     pt.on('uiRequest', (ev) => this._handleUIRequest(threadId, ev));
     pt.on('cmdError', (ev) => {
       this._state(threadId)?.channel.send(`⚠️ ${ev.error || 'command failed'}`).catch(() => {});
@@ -168,7 +278,7 @@ export class InteractiveManager {
     pt.on('agentEnd', async () => {
       const st = this._state(threadId);
       if (st?.stream) { await st.stream.finalize(); st.stream = null; }
-      await this._setStatus(threadId, null);
+      await this._clearStatus(threadId);
       this._stopTyping(threadId);
       touchConversation(threadId);
     });
@@ -176,10 +286,15 @@ export class InteractiveManager {
       this._stopTyping(threadId);
       setConversationStatus(threadId, 'idle');
     });
-    pt.on('exit', (code) => {
+    pt.on('exit', (code, info = {}) => {
       this._stopTyping(threadId);
-      if (code && code !== 0 && code !== null) {
-        this._state(threadId)?.channel.send(`⚠️ agent process exited (code ${code}). Send another message to restart.`).catch(() => {});
+      if (info.expectedExitReason === 'idle') return;
+      if (info.expectedExitReason === 'shutdown') return;
+
+      const exitedUnexpectedly = (code !== 0 && code !== null) || !!info.signal;
+      if (exitedUnexpectedly) {
+        const detail = code !== null && code !== undefined ? `code ${code}` : `signal ${info.signal}`;
+        this._state(threadId)?.channel.send(`⚠️ Agent process exited unexpectedly (${detail}). Send another message to restart.`).catch(() => {});
       }
     });
   }
@@ -219,6 +334,7 @@ export class InteractiveManager {
     }
 
     if (method === 'notify') {
+      if (ev.notifyType === 'info') return;
       const icon = ev.notifyType === 'error' ? '⚠️' : ev.notifyType === 'warning' ? '⚠️' : 'ℹ️';
       await st.channel.send(`${icon} ${ev.message}`).catch(() => {});
       return;
@@ -252,12 +368,18 @@ export class InteractiveManager {
 
   /** Start a brand-new conversation from a channel message that @mentioned the bot. */
   async startConversation(message, seedText) {
+    const titleSeed = seedText || message.content;
     let thread;
     try {
       thread = await message.startThread({
-        name: `evergreen · ${new Date().toISOString().slice(5, 16).replace('T', ' ')}`,
+        name: fallbackThreadName(titleSeed),
         autoArchiveDuration: 1440,
       });
+      generateThreadName(titleSeed)
+        .then((name) => {
+          if (name && name !== thread.name) return thread.setName(name, 'AI-generated title from initial user message');
+        })
+        .catch((err) => console.error('Thread title rename failed:', err.message));
     } catch (e) {
       await message.reply(`Couldn't start a thread: ${e.message}`).catch(() => {});
       return;
@@ -265,7 +387,7 @@ export class InteractiveManager {
     const sessionDir = path.join(SESSIONS_ROOT, thread.id);
     upsertConversation(thread.id, message.channel.id, thread.id, null, {});
     const pt = this._getOrCreatePiThread(thread.id, thread);
-    await thread.send('🌲 Started a conversation. I have evergreen\'s skills and DB; ask me to investigate, triage, or fix things — I\'ll ask before anything risky.').catch(() => {});
+    await thread.send('Thread created').catch(() => {});
     if (seedText && seedText.trim()) pt.prompt(seedText.trim());
   }
 

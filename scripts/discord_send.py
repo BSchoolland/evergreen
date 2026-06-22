@@ -3,6 +3,7 @@
 the bot process picks it up and sends it. With --wait-reply, polls for a reply."""
 
 import argparse
+import os
 import subprocess
 import sqlite3
 import sys
@@ -14,6 +15,7 @@ from evergreen.db import epoch
 
 DB_PATH = Path.home() / ".evergreen" / "evergreen.db"
 BOT_DIR = Path(__file__).resolve().parent.parent / "services" / "discord-bot"
+BOT_PID_FILE = Path.home() / ".evergreen" / "discord-bot.pid"
 
 def get_conn():
     conn = sqlite3.connect(str(DB_PATH))
@@ -33,26 +35,42 @@ def get_conn():
     """)
     return conn
 
-def ensure_bot_running():
-    """Start the Discord bot if it's not already running."""
+def _bot_running():
+    """True if the Discord bot is already up. The bot is launched as
+    `node index.js` with cwd=BOT_DIR (by server.sh and below), so its command
+    line is literally "node index.js" with no path — match that, and prefer the
+    PID file server.sh maintains. (The old pattern looked for the full path, which
+    never matched, so every send spawned a duplicate bot → duplicate messages.)"""
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "node.*services/discord-bot/index.js"],
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            return
-    except FileNotFoundError:
+        pid = int(BOT_PID_FILE.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
+    try:
+        return subprocess.run(["pgrep", "-f", "node index.js"],
+                              capture_output=True).returncode == 0
+    except FileNotFoundError:
+        return False
 
+
+def ensure_bot_running():
+    """Start the Discord bot only if it's genuinely not running."""
+    if _bot_running():
+        return
     print("Bot not running, starting it...", file=sys.stderr)
-    subprocess.Popen(
+    proc = subprocess.Popen(
         ["node", "index.js"],
         cwd=str(BOT_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    # Record the pid so the next send sees this instance and won't spawn another.
+    try:
+        BOT_PID_FILE.write_text(f"{proc.pid}\n")
+    except OSError:
+        pass
     time.sleep(5)
 
 

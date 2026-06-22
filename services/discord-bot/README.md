@@ -34,12 +34,11 @@ no locks, no worktree lifecycle to manage.
   (`.pi/sessions/threads/<threadId>/`), tracked in the `conversations` table. The
   child process is evicted after 30 min idle and **resumed from the session file**
   on your next message — context survives.
-- **Approvals:** the agent works freely in its sandbox clone (read/edit/write/ordinary
-  bash), but outward or irreversible commands (`git push`, `gh pr create`, `rm -rf`,
-  `deploy`, …) pause for an **Allow/Deny button**. Implemented by the Pi extension
-  `.pi/extensions/evergreen-approval.js`, which is env-gated to the interactive host
-  so the watchdog still runs autonomously. Only the owner (`DISCORD_OWNER_ID`) can
-  drive the agent or click approve.
+- **Permissionless:** the agent runs tools freely in its sandbox clone — pi ships
+  with no permission gating and we keep it that way. Only the owner
+  (`DISCORD_OWNER_ID`) can drive the agent at all. (If a skill itself calls
+  `ctx.ui.confirm`, `interactive.js` will still render it as a button — but nothing
+  proactively gates tool calls.)
 
 ## Files
 
@@ -48,7 +47,7 @@ no locks, no worktree lifecycle to manage.
 - `piThread.js` — one `pi --mode rpc` child per thread (JSONL framing, prompt/steer,
   idle eviction, resume). Emits high-level events.
 - `interactive.js` — wires threads ↔ `PiThread`: throttled streaming edits, a working
-  status line, approval/select buttons, free-text input capture.
+  status line, free-text input capture (and renders any skill-initiated confirm/select).
 - `db.js` — `discord_messages` + `conversations` + config helpers.
 
 ## Running
@@ -63,5 +62,6 @@ node index.js
 ```
 
 Config it reads from the `configs` table: `project_path_interactive` (falls back to
-`project_path` with a collision warning), `pi_model` (optional `provider/model`),
-plus `DISCORD_TOKEN` / `DISCORD_CHANNEL_ID` / `DISCORD_OWNER_ID` from `.env`.
+`project_path` with a collision warning), `discord_model` (optional `provider/model`,
+falling back to `pi_model`), `discord_thinking` (optional Pi thinking level), plus
+`DISCORD_TOKEN` / `DISCORD_CHANNEL_ID` / `DISCORD_OWNER_ID` from `.env`.
