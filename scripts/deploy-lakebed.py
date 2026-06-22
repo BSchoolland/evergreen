@@ -35,14 +35,22 @@ def export_data():
         "pr_url, pr_status, status, occurrence_count "
         "FROM bugs ORDER BY created_at DESC"
     )
+    # alerts/runs are capped to the most recent rows to keep the deployed Lakebed
+    # artifact under its 2 MiB request limit (aggregate stats below still count the
+    # full tables). Bugs are kept in full — there are far fewer of them.
     alerts = query(
         "SELECT id, created_at, source, source_url, cve, name, severity, "
         "affected_component, summary, impact_assessment, pr_url, pr_status, status "
-        "FROM security_alerts ORDER BY created_at DESC"
+        "FROM security_alerts ORDER BY created_at DESC LIMIT 120"
     )
     runs = query(
-        "SELECT id, started_at, finished_at, type, summary "
-        "FROM runs ORDER BY started_at DESC LIMIT 200"
+        "SELECT id, started_at, finished_at, type, summary, cost, tokens, model, effort "
+        "FROM runs ORDER BY started_at DESC LIMIT 120"
+    )
+    cost_by_skill = query(
+        "SELECT replace(type, 'cron:', '') as skill, "
+        "ROUND(SUM(cost), 2) as cost, COUNT(*) as runs, ROUND(AVG(cost), 3) as avg_cost "
+        "FROM runs WHERE cost IS NOT NULL GROUP BY skill ORDER BY cost DESC"
     )
 
     conn = get_connection()
@@ -53,6 +61,11 @@ def export_data():
         "alerts_cleared": conn.execute("SELECT COUNT(*) FROM security_alerts WHERE status IN ('not_affected','not_actionable','resolved')").fetchone()[0],
         "total_runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
         "timeouts": conn.execute("SELECT COUNT(*) FROM runs WHERE summary LIKE 'TIMEOUT%'").fetchone()[0],
+        "cost_total": round(conn.execute("SELECT COALESCE(SUM(cost), 0) FROM runs").fetchone()[0], 2),
+        "cost_7d": round(conn.execute(
+            "SELECT COALESCE(SUM(cost), 0) FROM runs "
+            "WHERE started_at > cast(strftime('%s','now') as integer) - 604800"
+        ).fetchone()[0], 2),
         "prs_open": (
             conn.execute("SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='open'").fetchone()[0]
             + conn.execute("SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='open'").fetchone()[0]
@@ -78,7 +91,7 @@ def export_data():
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    return bugs, alerts, runs, stats, daily, now
+    return bugs, alerts, runs, stats, daily, cost_by_skill, now
 
 
 TYPES = """\
@@ -119,6 +132,10 @@ export type Run = {
   finished_at: number | null;
   type: string;
   summary: string | null;
+  cost: number | null;
+  tokens: number | null;
+  model: string | null;
+  effort: string | null;
 };
 
 export type Stats = {
@@ -128,9 +145,18 @@ export type Stats = {
   alerts_cleared: number;
   total_runs: number;
   timeouts: number;
+  cost_total: number;
+  cost_7d: number;
   prs_open: number;
   prs_merged: number;
   prs_closed: number;
+};
+
+export type CostBySkill = {
+  skill: string;
+  cost: number;
+  runs: number;
+  avg_cost: number;
 };
 
 export type DailyEntry = { day: string; n: number };
@@ -144,13 +170,14 @@ export type DailyActivity = {
 """
 
 
-def write_data_ts(bugs, alerts, runs, stats, daily, now):
+def write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, now):
     lines = [TYPES]
     lines.append(f"export const bugs: Bug[] = {json.dumps(bugs, separators=(',', ':'))};")
     lines.append(f"export const alerts: Alert[] = {json.dumps(alerts, separators=(',', ':'))};")
     lines.append(f"export const runs: Run[] = {json.dumps(runs, separators=(',', ':'))};")
     lines.append(f"export const stats: Stats = {json.dumps(stats, separators=(',', ':'))};")
     lines.append(f"export const daily: DailyActivity = {json.dumps(daily, separators=(',', ':'))};")
+    lines.append(f"export const costBySkill: CostBySkill[] = {json.dumps(cost_by_skill, separators=(',', ':'))};")
     lines.append(f'export const lastUpdated = "{now}";')
     lines.append("")
     DATA_FILE.write_text("\n".join(lines))
@@ -187,9 +214,9 @@ def deploy():
 
 def main():
     print("Exporting Evergreen DB...")
-    bugs, alerts, runs, stats, daily, now = export_data()
+    bugs, alerts, runs, stats, daily, cost_by_skill, now = export_data()
     print(f"  {len(bugs)} bugs, {len(alerts)} alerts, {len(runs)} runs")
-    write_data_ts(bugs, alerts, runs, stats, daily, now)
+    write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, now)
     changed = git_commit()
     if changed:
         deploy()

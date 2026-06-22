@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import get_connection
+from evergreen.db import epoch, get_connection, init_db
 
 PORT = int(os.environ.get("EVERGREEN_DASHBOARD_PORT", 8080))
 STATIC_DIR = Path(__file__).resolve().parent
@@ -43,8 +43,9 @@ def get_alerts():
 
 def get_runs():
     return query_db(
-        "SELECT id, started_at, finished_at, type, summary "
-        "FROM runs ORDER BY started_at DESC LIMIT 100"
+        "SELECT id, started_at, finished_at, type, summary, cost, tokens, model, effort, "
+        "parent_run_id, branch, pr_url "
+        "FROM runs ORDER BY started_at DESC LIMIT 200"
     )
 
 
@@ -58,8 +59,14 @@ def get_stats():
     bugs_resolved = conn.execute("SELECT COUNT(*) FROM bugs WHERE status = 'resolved'").fetchone()[0]
     alerts_actionable = conn.execute("SELECT COUNT(*) FROM security_alerts WHERE status IN ('new', 'in_progress')").fetchone()[0]
     alerts_cleared = conn.execute("SELECT COUNT(*) FROM security_alerts WHERE status IN ('not_affected', 'not_actionable', 'resolved')").fetchone()[0]
-    total_runs = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    total_runs = conn.execute("SELECT COUNT(*) FROM runs WHERE type NOT LIKE 'review:%'").fetchone()[0]
+    review_runs = conn.execute("SELECT COUNT(*) FROM runs WHERE type = 'review'").fetchone()[0]
     timeouts = conn.execute("SELECT COUNT(*) FROM runs WHERE summary LIKE 'TIMEOUT%'").fetchone()[0]
+    cost_total = conn.execute("SELECT COALESCE(SUM(cost), 0) FROM runs").fetchone()[0]
+    cost_7d = conn.execute(
+        "SELECT COALESCE(SUM(cost), 0) FROM runs WHERE started_at > ?",
+        (epoch() - 7 * 86400,),
+    ).fetchone()[0]
     prs_open = (
         conn.execute("SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status = 'open'").fetchone()[0]
         + conn.execute("SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status = 'open'").fetchone()[0]
@@ -79,7 +86,10 @@ def get_stats():
         "alerts_actionable": alerts_actionable,
         "alerts_cleared": alerts_cleared,
         "total_runs": total_runs,
+        "review_runs": review_runs,
         "timeouts": timeouts,
+        "cost_total": round(cost_total, 2),
+        "cost_7d": round(cost_7d, 2),
         "prs_open": prs_open,
         "prs_merged": prs_merged,
         "prs_closed": prs_closed,
@@ -90,7 +100,7 @@ def get_daily_activity():
     return {
         "runs": query_db(
             "SELECT date(started_at, 'unixepoch', 'localtime') as day, COUNT(*) as n "
-            "FROM runs WHERE started_at IS NOT NULL "
+            "FROM runs WHERE started_at IS NOT NULL AND type NOT LIKE 'review:%' "
             "GROUP BY day ORDER BY day"
         ),
         "bugs": query_db(
@@ -180,6 +190,9 @@ def get_tailscale_ip():
 
 
 def main():
+    conn = init_db()
+    conn.close()
+
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 

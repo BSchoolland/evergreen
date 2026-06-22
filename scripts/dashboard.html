@@ -82,7 +82,15 @@
   .panel-result { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-left: 6px; }
   .panel-result.ok { background: #dcfce7; color: #15803d; }
   .panel-result.fail { background: #fee2e2; color: #b91c1c; }
-  .panel-summary { font-size: 13px; color: #3d5a3d; line-height: 1.7; }
+  .panel-summary { font-size: 13px; color: #3d5a3d; line-height: 1.7; white-space: pre-wrap; }
+  .review-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid #edf4ed; }
+  .review-block-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #6b7c6b; margin-bottom: 8px; }
+  .review-child { border: 1px solid #edf4ed; border-radius: 8px; padding: 10px; margin-top: 8px; background: #fbfdfb; }
+  .review-child-title { font-size: 12px; font-weight: 700; color: #14532d; display: flex; justify-content: space-between; gap: 8px; }
+  .review-child-meta { font-size: 11px; color: #6b7c6b; margin-top: 3px; }
+  .review-output { margin-top: 8px; padding: 8px; border-radius: 6px; background: #f7faf7; color: #3d5a3d; font-size: 11px; line-height: 1.5; white-space: pre-wrap; max-height: 220px; overflow: auto; }
+  .panel-link { color: #16a34a; cursor: pointer; text-decoration: none; }
+  .panel-link:hover { text-decoration: underline; }
 
   /* Activity / Impact */
   .graph-container { background: white; border: 1px solid #d4e4d4; border-radius: 10px; padding: 20px 24px; }
@@ -279,6 +287,7 @@ function setFilter(f) { issueFilter = f; renderIssues(); }
 const SKILL_COLORS = {
   'check-bugs':        { bg: '#dcfce7', fg: '#14532d', border: '#bbf7d0' },
   'triage':            { bg: '#dbeafe', fg: '#1e3a8a', border: '#bfdbfe' },
+  'review':            { bg: '#fae8ff', fg: '#86198f', border: '#f5d0fe' },
   'hackernews-monitor':{ bg: '#fef3c7', fg: '#78350f', border: '#fde68a' },
   'tacos-audit':       { bg: '#ede9fe', fg: '#5b21b6', border: '#ddd6fe' },
   'update-status':     { bg: '#e0f2fe', fg: '#0c4a6e', border: '#bae6fd' },
@@ -288,15 +297,54 @@ const STALE_COLOR   = { bg: '#f1f5f9', fg: '#94a3b8', border: '#e2e8f0' };
 
 let fcCalendar = null;
 
+function runById(id) { return (DATA.runs || []).find(r => Number(r.id) === Number(id)); }
+function runChildren(id) { return (DATA.runs || []).filter(r => Number(r.parent_run_id) === Number(id)); }
+function isReviewLens(r) { return (r.type || '').startsWith('review:'); }
+function isHiddenTimelineRun(r) {
+  const p = runById(r.parent_run_id);
+  return isReviewLens(r) && p && p.type === 'review';
+}
+function runKind(r) {
+  if (r.type === 'review') return 'review';
+  if (isReviewLens(r)) return 'review';
+  return (r.type || '').replace(/^(cron|manual):/, '');
+}
+function runLabel(r) {
+  if (r.type === 'review') return `review${r.branch ? ' · ' + r.branch : ''}`;
+  if (isReviewLens(r)) return `review · ${r.type.replace('review:', '')}`;
+  const skill = runKind(r);
+  const isManual = (r.type || '').startsWith('manual:');
+  const isTimeout = (r.summary || '').startsWith('TIMEOUT');
+  return (isTimeout ? `${skill} (timeout)` : skill) + (isManual ? ' ·test' : '');
+}
+function runCost(r) {
+  if (r.cost != null) return Number(r.cost);
+  const costs = runChildren(r.id).map(c => c.cost).filter(c => c != null).map(Number);
+  if (!costs.length) return null;
+  return costs.reduce((a, b) => a + b, 0);
+}
+function runTokens(r) {
+  if (r.tokens != null) return Number(r.tokens);
+  const tokens = runChildren(r.id).map(c => c.tokens).filter(t => t != null).map(Number);
+  if (!tokens.length) return null;
+  return tokens.reduce((a, b) => a + b, 0);
+}
+function runCostString(r) {
+  const cost = runCost(r);
+  if (cost == null) return '';
+  const tokens = runTokens(r);
+  const tokStr = tokens ? ` &bull; ${(tokens / 1000).toFixed(0)}k tokens` : '';
+  return ` &bull; $${cost.toFixed(2)}${tokStr}`;
+}
+
 function renderTimeline() {
   const runs = DATA.runs || [];
 
-  const events = runs.filter(r => r.started_at).map(r => {
-    const skill = r.type.replace('cron:', '');
+  const events = runs.filter(r => r.started_at && !isHiddenTimelineRun(r)).map(r => {
+    const kind = runKind(r);
     const isTimeout = (r.summary || '').startsWith('TIMEOUT');
     const isStale = !r.finished_at;
-    const colors = isTimeout ? TIMEOUT_COLOR : isStale ? STALE_COLOR : (SKILL_COLORS[skill] || SKILL_COLORS['check-bugs']);
-    const label = isTimeout ? `${skill} (timeout)` : skill;
+    const colors = isTimeout ? TIMEOUT_COLOR : isStale ? STALE_COLOR : (SKILL_COLORS[kind] || SKILL_COLORS['check-bugs']);
 
     const start = new Date(r.started_at * 1000);
     let end = new Date((r.started_at + 300) * 1000);
@@ -304,7 +352,7 @@ function renderTimeline() {
 
     return {
       id: String(r.id),
-      title: label,
+      title: runLabel(r),
       start,
       end,
       backgroundColor: colors.bg,
@@ -344,11 +392,47 @@ function renderTimeline() {
   fcCalendar.render();
 }
 
+function renderReviewChildren(parentId) {
+  const children = runChildren(parentId).filter(isReviewLens).sort((a, b) => (a.type || '').localeCompare(b.type || ''));
+  if (!children.length) return '';
+  let html = '<div class="review-block"><div class="review-block-title">Review lenses</div>';
+  for (const c of children) {
+    const lens = c.type.replace('review:', '');
+    const timedOut = (c.summary || '').startsWith('TIMEOUT');
+    const cost = runCostString(c).replace(/^ &bull; /, '');
+    const model = c.model ? `⚙ ${esc(c.model)}${c.effort ? ` &bull; ${esc(c.effort)}` : ''}` : '';
+    html += `<div class="review-child">
+      <div class="review-child-title"><span>${esc(lens)}</span><span class="panel-result ${timedOut ? 'fail' : 'ok'}">${timedOut ? 'Timeout' : 'Done'}</span></div>
+      <div class="review-child-meta">${cost}${cost && model ? ' &bull; ' : ''}${model}</div>
+      <div class="review-output">${esc(c.summary || 'No summary available.')}</div>
+    </div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderLinkedReviews(parentId) {
+  const reviews = runChildren(parentId).filter(r => r.type === 'review').sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  if (!reviews.length) return '';
+  let html = '<div class="review-block"><div class="review-block-title">Review batches</div>';
+  for (const rev of reviews) {
+    const pr = rev.pr_url ? ` &bull; <a href="${esc(rev.pr_url)}" target="_blank">PR</a>` : '';
+    html += `<div class="review-child">
+      <div class="review-child-title"><span><a class="panel-link" onclick="showRunPanel(${rev.id})">${esc(rev.branch || 'review')}</a></span><span>${runCostString(rev).replace(/^ &bull; /, '')}</span></div>
+      <div class="review-child-meta">Run #${rev.id}${pr}</div>
+      <div class="review-output">${esc(rev.summary || 'No summary available.')}</div>
+    </div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
 function showRunPanel(id) {
-  const r = DATA.runs.find(x => x.id === id);
+  const r = runById(id);
   if (!r) return;
 
-  const skill = r.type.replace('cron:', '');
+  const skill = runKind(r);
+  const isManual = (r.type || '').startsWith('manual:');
   const isTimeout = (r.summary || '').startsWith('TIMEOUT');
   const isStale = !r.finished_at;
   const resultClass = isTimeout || isStale ? 'fail' : 'ok';
@@ -364,12 +448,22 @@ function showRunPanel(id) {
     timeStr += ` &ndash; ${formatTime(r.finished_at)}`;
   }
 
+  const costStr = runCostString(r);
+  const modelStr = r.model ? `<div style="margin-top:6px;font-size:11px;color:#6b7c6b;">⚙ ${esc(r.model)}${r.effort ? ` &bull; ${esc(r.effort)}` : ''}</div>` : '';
+  const parent = runById(r.parent_run_id);
+  const parentStr = parent ? `<div class="review-child-meta">Parent: <a class="panel-link" onclick="showRunPanel(${parent.id})">Run #${parent.id} (${esc(runKind(parent))})</a></div>` : '';
+  const prStr = r.pr_url ? `<div class="review-child-meta">PR: <a href="${esc(r.pr_url)}" target="_blank">${esc(r.pr_url)}</a></div>` : '';
+  const branchStr = r.branch ? `<div class="review-child-meta">Branch: ${esc(r.branch)}</div>` : '';
+
   document.getElementById('calPanelContent').innerHTML = `
     <button class="panel-close" onclick="closePanel()">&times;</button>
-    <div class="panel-skill">${esc(skill)}</div>
+    <div class="panel-skill">${esc(skill)}${isManual ? ' <span style="color:#b45309;border:1px solid #fcd34d;border-radius:4px;padding:0 4px;font-size:10px;">manual</span>' : ''}</div>
     <div class="panel-title">Run #${r.id}</div>
-    <div class="panel-time">${timeStr}${durationStr} <span class="panel-result ${resultClass}">${resultLabel}</span></div>
+    <div class="panel-time">${timeStr}${durationStr}${costStr} <span class="panel-result ${resultClass}">${resultLabel}</span></div>
+    ${modelStr}${parentStr}${branchStr}${prStr}
     <div class="panel-summary">${esc(r.summary || 'No summary available.')}</div>
+    ${r.type === 'review' ? renderReviewChildren(r.id) : ''}
+    ${renderLinkedReviews(r.id)}
   `;
   document.getElementById('calPanel').classList.add('open');
 }
@@ -551,6 +645,9 @@ function renderActivityGraph() {
   graphHtml += `</div></div>
     <div class="graph-stats">
       <div class="graph-stat"><div class="val">${stats.total_runs||0}</div><div class="lbl">Runs</div></div>
+      <div class="graph-stat"><div class="val">${stats.review_runs||0}</div><div class="lbl">Reviews</div></div>
+      <div class="graph-stat"><div class="val">$${(stats.cost_7d||0).toFixed(2)}</div><div class="lbl">Spend (7d)</div></div>
+      <div class="graph-stat"><div class="val">$${(stats.cost_total||0).toFixed(2)}</div><div class="lbl">Spend (total)</div></div>
       <div class="graph-stat"><div class="val">${(stats.bugs_open||0) + (stats.bugs_resolved||0)}</div><div class="lbl">Bugs found</div></div>
       <div class="graph-stat"><div class="val">${(stats.alerts_actionable||0) + (stats.alerts_cleared||0)}</div><div class="lbl">Alerts triaged</div></div>
       <div class="graph-stat"><div class="val">${stats.prs_merged||0}</div><div class="lbl">PRs merged</div></div>
