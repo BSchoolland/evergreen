@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from evergreen.db import epoch, get_cli, get_config, get_connection, get_project_path, init_db
+from evergreen.pi_usage import session_metrics
 
 LOG_PATH = Path.home() / ".evergreen" / "server.log"
 PID_PATH = Path.home() / ".evergreen" / "server.pid"
@@ -37,6 +38,48 @@ SCHEDULE_DEFAULTS = {
 }
 
 MAX_VERIFY_RUNS = 5
+
+# Per-skill model + reasoning effort. Heavy skills (verify-bug, triage) keep the
+# global default — pi's configured model (gpt-5.5) at its default thinking level
+# (xhigh). Light/mechanical skills run on a cheaper model and/or lower effort.
+# NOTE: the model MUST carry its provider prefix (e.g. "openai-codex/...") so it
+# resolves to the intended provider and not, say, openrouter.
+#
+# Resolution order per skill (first non-empty wins):
+#   1. config table:  model:<skill> / thinking:<skill>   (runtime override, no deploy)
+#   2. SKILL_MODELS below
+#   3. config table:  pi_model                            (global model override)
+#   4. pi's own configured defaults                       (model=None, thinking=None)
+SKILL_MODELS = {
+    # "write 2 sentences about what you did" — ~7x cheaper at mini/minimal with no
+    # measurable quality loss (see token-cost analysis 2026-06-16).
+    "summary-of-work": {"model": "openai-codex/gpt-5.4-mini", "thinking": "minimal"},
+    # Read/classify/reconcile work — cheap model is fine, mistakes are visible and
+    # self-correct on the next run.
+    "update-status": {"model": "openai-codex/gpt-5.4-mini", "thinking": "low"},
+    "tacos-audit": {"model": "openai-codex/gpt-5.4-mini", "thinking": "medium"},
+    "hackernews-monitor": {"model": "openai-codex/gpt-5.4-mini", "thinking": "medium"},
+    # Detector — mini/medium: ~$0.54/run (half of gpt-5.5/medium), finds real bugs.
+    # It never notifies (detection-only); pings are gated behind verify-bug, so
+    # mini's looser notification judgment can't reach the owner. n=2 trials 2026-06-16.
+    "check-bugs": {"model": "openai-codex/gpt-5.4-mini", "thinking": "medium"},
+    # Left at the global default (gpt-5.5 / xhigh) — high-stakes reasoning:
+    #   verify-bug  : scientific root-cause + the ONLY skill that notifies the owner
+    #   triage      : writes code + opens PRs
+}
+
+
+def resolve_model(skill: str):
+    """Return (model, thinking) for a skill. Either may be None to inherit pi's
+    own configured default. See SKILL_MODELS for the resolution order."""
+    cfg = SKILL_MODELS.get(skill, {})
+    model = (
+        get_config(f"model:{skill}")
+        or cfg.get("model")
+        or get_config("pi_model")
+    )
+    thinking = get_config(f"thinking:{skill}") or cfg.get("thinking")
+    return model, thinking
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,23 +136,29 @@ PRECONDITIONS = {
 
 # --- Queue management ---
 
-def enqueue(skill: str):
+def enqueue(skill: str, source: str = "cron", force: bool = False):
     conn = get_connection()
-    already = conn.execute(
-        "SELECT 1 FROM skill_queue WHERE skill = ? AND status IN ('pending', 'running')",
-        (skill,),
-    ).fetchone()
-    if already:
-        log.info("Skill %s already queued or running, skipping", skill)
-        conn.close()
-        return
-    conn.execute("INSERT INTO skill_queue (skill) VALUES (?)", (skill,))
+    # Cron enqueues are de-duped (the scheduler may re-fire while one is pending).
+    # Manual triggers are always inserted — the user asked for this specific run.
+    if source == "cron":
+        already = conn.execute(
+            "SELECT 1 FROM skill_queue WHERE skill = ? AND status IN ('pending', 'running')",
+            (skill,),
+        ).fetchone()
+        if already:
+            log.info("Skill %s already queued or running, skipping", skill)
+            conn.close()
+            return
+    conn.execute(
+        "INSERT INTO skill_queue (skill, source, force) VALUES (?, ?, ?)",
+        (skill, source, 1 if force else 0),
+    )
     conn.commit()
     conn.close()
-    log.info("Enqueued skill: %s", skill)
+    log.info("Enqueued skill: %s (source=%s, force=%s)", skill, source, force)
 
 
-def pop_next() -> tuple[int, str] | None:
+def pop_next() -> tuple[int, str, str, int] | None:
     conn = get_connection()
     running = conn.execute(
         "SELECT 1 FROM skill_queue WHERE status = 'running'"
@@ -119,12 +168,12 @@ def pop_next() -> tuple[int, str] | None:
         return None
 
     row = conn.execute(
-        "SELECT id, skill FROM skill_queue WHERE status = 'pending' ORDER BY queued_at LIMIT 1"
+        "SELECT id, skill, source, force FROM skill_queue WHERE status = 'pending' ORDER BY queued_at LIMIT 1"
     ).fetchone()
     conn.close()
     if not row:
         return None
-    return row[0], row[1]
+    return row[0], row[1], row[2], row[3]
 
 
 def skip(queue_id: int, skill: str):
@@ -156,18 +205,24 @@ def drain_queue():
     item = pop_next()
     if not item:
         return
-    queue_id, skill = item
+    queue_id, skill, source, force = item
 
+    # Manual triggers can force-run regardless of preconditions (for testing a
+    # skill even when it has no pending work). Cron runs always honor them.
     check = PRECONDITIONS.get(skill)
-    if check and not check():
+    if check and not force and not check():
         skip(queue_id, skill)
         return
 
     mark_running(queue_id)
-    run_skill(skill, queue_id)
+    # Manual runs are tagged manual:<skill> so they're distinguishable on the
+    # timeline, and they don't disturb the cron schedule (last_run_at).
+    run_skill(skill, queue_id,
+              run_type=f"{source}:{skill}",
+              update_schedule=(source == "cron"))
     mark_done(queue_id)
 
-    if skill == "verify-bug":
+    if source == "cron" and skill == "verify-bug":
         maybe_requeue_verify()
 
 
@@ -221,19 +276,21 @@ def reset_project_branch():
         log.warning("Failed to reset project branch: %s", e)
 
 
-def run_skill(skill: str, queue_id: int):
-    log.info("Starting skill: %s", skill)
+def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: bool = True):
+    run_type = run_type or f"cron:{skill}"
+    log.info("Starting skill: %s (%s)", skill, run_type)
     reset_project_branch()
 
     conn = get_connection()
-    conn.execute(
-        "UPDATE cron_jobs SET last_run_at = ? WHERE skill = ?",
-        (epoch(), skill),
-    )
-    conn.commit()
+    if update_schedule:
+        conn.execute(
+            "UPDATE cron_jobs SET last_run_at = ? WHERE skill = ?",
+            (epoch(), skill),
+        )
+        conn.commit()
     run_id = conn.execute(
         "INSERT INTO runs (type, summary) VALUES (?, ?) RETURNING id",
-        (f"cron:{skill}", f"Running /{skill}-evergreen"),
+        (run_type, f"Running /{skill}-evergreen"),
     ).fetchone()[0]
     conn.commit()
     conn.close()
@@ -243,7 +300,7 @@ def run_skill(skill: str, queue_id: int):
     session_id = None
     session_dir = None
     run_cwd = None
-    run_env = None
+    run_env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
     if cli == "claude":
         cmd = ["claude", "-p", f"/{skill}-evergreen",
                "--dangerously-skip-permissions", "--output-format", "json"]
@@ -253,12 +310,14 @@ def run_skill(skill: str, queue_id: int):
         # lets the summary step resume this exact session with --continue.
         session_dir = REPO / ".pi" / "sessions" / "watchdog" / f"run-{run_id}"
         cmd = ["pi", "-p", "--session-dir", str(session_dir)]
-        model = get_config("pi_model")
+        model, thinking = resolve_model(skill)
         if model:
             cmd += ["--model", model]
+        if thinking:
+            cmd += ["--thinking", thinking]
         cmd += [f"/skill:{skill}-evergreen"]
         run_cwd = str(REPO)
-        run_env = {**os.environ, "EVERGREEN_PROJECT_PATH": get_project_path() or ""}
+        run_env = {**run_env, "EVERGREEN_PROJECT_PATH": get_project_path() or ""}
     else:
         cmd = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
                "exec", "--skip-git-repo-check", f"/{skill}-evergreen"]
@@ -300,8 +359,29 @@ def run_skill(skill: str, queue_id: int):
         run_summary(run_id, session_id=session_id)
     elif cli == "pi" and session_dir:
         run_summary(run_id, session_dir=session_dir)
+        # Record cost AFTER the summary step so the run total includes it.
+        record_run_cost(run_id, session_dir)
 
     deploy_lakebed()
+
+
+
+def record_run_cost(run_id: int, session_dir: Path):
+    try:
+        cost, tokens, model, effort = session_metrics(session_dir)
+    except Exception as e:
+        log.warning("Could not compute metrics for run %d: %s", run_id, e)
+        return
+    if cost is None and model is None:
+        return
+    conn = get_connection()
+    conn.execute(
+        "UPDATE runs SET cost = ?, tokens = ?, model = ?, effort = ? WHERE id = ?",
+        (cost, tokens, model, effort, run_id),
+    )
+    conn.commit()
+    conn.close()
+    log.info("Run %d: $%.4f, %d tokens, %s/%s", run_id, cost or 0, tokens or 0, model, effort)
 
 
 def extract_session_id(json_output: str) -> str | None:
@@ -326,9 +406,11 @@ def run_summary(run_id: int, session_id: str = None, session_dir: Path = None):
             log.info("Resuming pi session in %s for work summary", session_dir)
             env["EVERGREEN_PROJECT_PATH"] = get_project_path() or ""
             cmd = ["pi", "-p", "--session-dir", str(session_dir), "--continue"]
-            model = get_config("pi_model")
+            model, thinking = resolve_model("summary-of-work")
             if model:
                 cmd += ["--model", model]
+            if thinking:
+                cmd += ["--thinking", thinking]
             cmd += ["/skill:summary-of-work-evergreen"]
             cwd = str(REPO)
         else:
@@ -347,10 +429,14 @@ def deploy_lakebed():
     if not script.exists():
         return
     try:
+        # Route output to the server log (not DEVNULL) so a failing deploy — e.g.
+        # the artifact exceeding Lakebed's request-size limit — is visible instead
+        # of silently swallowed.
+        logfh = open(LOG_PATH, "a")
         subprocess.Popen(
             [sys.executable, str(script)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=logfh,
+            stderr=subprocess.STDOUT,
         )
         log.info("Triggered Lakebed deploy")
     except Exception as e:
