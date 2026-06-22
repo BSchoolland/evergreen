@@ -22,6 +22,8 @@ Thumbs.db
 # Evergreen runtime
 .evergreen/
 .claude/scheduled_tasks.lock
+# Generated Lakebed deploy artifact — its own git repo, managed by deploy-lakebed.py
+/lakebed/
 
 # pi skills are generated from .claude/skills by scripts/sync-pi-skills.py
 /.pi/skills/
