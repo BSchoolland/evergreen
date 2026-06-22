@@ -117,10 +117,12 @@ def main():
 
     up = sub.add_parser("update", help="Update a bug")
     up.add_argument("id", type=int)
-    up.add_argument("--status", choices=["new", "verified", "unverified", "blocked", "not_actionable", "in_progress", "resolved", "dismissed"])
+    up.add_argument("--status", choices=["new", "verified", "unverified", "blocked", "not_actionable", "in_progress", "backlog", "action_needed", "resolved", "dismissed"])
     up.add_argument("--pr-url")
     up.add_argument("--probable-root-cause")
     up.add_argument("--severity", choices=["critical", "high", "medium", "low"])
+    up.add_argument("--disposition-reason", help="Why the issue was dismissed or moved to backlog")
+    up.add_argument("--dismissed-by", choices=["verify", "pr_closed", "owner"])
 
     res = sub.add_parser("resolve", help="Resolve a bug")
     res.add_argument("id", type=int)
@@ -153,6 +155,8 @@ def main():
             pr_url=args.pr_url,
             probable_root_cause=args.probable_root_cause,
             severity=args.severity,
+            disposition_reason=args.disposition_reason,
+            dismissed_by=args.dismissed_by,
         )
     elif args.command == "resolve":
         resolve_bug(args.id)

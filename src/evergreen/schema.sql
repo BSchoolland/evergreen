@@ -16,8 +16,10 @@ CREATE TABLE IF NOT EXISTS bugs (
   pr_url TEXT,
   pr_status TEXT CHECK(pr_status IN ('open', 'merged', 'closed')),
   discord_message_id TEXT,
-  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'verified', 'unverified', 'blocked', 'not_actionable', 'in_progress', 'resolved', 'dismissed')),
-  resolved_at INTEGER
+  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'verified', 'unverified', 'blocked', 'not_actionable', 'in_progress', 'backlog', 'action_needed', 'resolved', 'dismissed')),
+  resolved_at INTEGER,
+  disposition_reason TEXT,
+  dismissed_by TEXT CHECK(dismissed_by IN ('verify', 'pr_closed', 'owner'))
 );
 
 CREATE TABLE IF NOT EXISTS security_alerts (
@@ -35,8 +37,10 @@ CREATE TABLE IF NOT EXISTS security_alerts (
   pr_url TEXT,
   pr_status TEXT CHECK(pr_status IN ('open', 'merged', 'closed')),
   discord_message_id TEXT,
-  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'not_affected', 'not_actionable', 'in_progress', 'resolved', 'dismissed')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'not_affected', 'not_actionable', 'in_progress', 'backlog', 'action_needed', 'resolved', 'dismissed')),
   resolved_at INTEGER,
+  disposition_reason TEXT,
+  dismissed_by TEXT CHECK(dismissed_by IN ('verify', 'pr_closed', 'owner')),
   UNIQUE(source, cve, source_url)
 );
 
@@ -57,7 +61,14 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   finished_at INTEGER,
   type TEXT NOT NULL,
-  summary TEXT
+  summary TEXT,
+  cost REAL,
+  tokens INTEGER,
+  model TEXT,
+  effort TEXT,
+  parent_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+  branch TEXT,
+  pr_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
@@ -72,7 +83,9 @@ CREATE TABLE IF NOT EXISTS skill_queue (
   skill TEXT NOT NULL,
   queued_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   started_at INTEGER,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'done'))
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'done')),
+  source TEXT NOT NULL DEFAULT 'cron',
+  force INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS configs (

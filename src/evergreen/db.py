@@ -142,6 +142,105 @@ def _migrate_verify_bug(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_disposition(conn: sqlite3.Connection):
+    """Add disposition_reason/dismissed_by columns and the 'backlog' status to
+    bugs and security_alerts by rebuilding them from the current schema."""
+    schema = _read_schema()
+    for table in ("bugs", "security_alerts"):
+        try:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        except sqlite3.OperationalError:
+            continue
+        if not cols or "disposition_reason" in cols:
+            continue
+        conn.execute(f"ALTER TABLE {table} RENAME TO _old_{table}")
+        for stmt in schema.split(";"):
+            if f"CREATE TABLE IF NOT EXISTS {table}" in stmt:
+                conn.execute(stmt + ";")
+                break
+        old_cols = [r[1] for r in conn.execute(f"PRAGMA table_info(_old_{table})").fetchall()]
+        new_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        shared = ", ".join(c for c in old_cols if c in new_cols)
+        conn.execute(f"INSERT INTO {table} ({shared}) SELECT {shared} FROM _old_{table}")
+        conn.execute(f"DROP TABLE _old_{table}")
+    conn.commit()
+
+
+def _migrate_action_needed(conn: sqlite3.Connection):
+    """Add the 'action_needed' status to bugs/security_alerts (CHECK rebuild)."""
+    schema = _read_schema()
+    for table in ("bugs", "security_alerts"):
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            continue
+        if not row or not row[0] or "action_needed" in row[0]:
+            continue
+        conn.execute(f"ALTER TABLE {table} RENAME TO _old_{table}")
+        for stmt in schema.split(";"):
+            if f"CREATE TABLE IF NOT EXISTS {table}" in stmt:
+                conn.execute(stmt + ";")
+                break
+        old_cols = [r[1] for r in conn.execute(f"PRAGMA table_info(_old_{table})").fetchall()]
+        new_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        shared = ", ".join(c for c in old_cols if c in new_cols)
+        conn.execute(f"INSERT INTO {table} ({shared}) SELECT {shared} FROM _old_{table}")
+        conn.execute(f"DROP TABLE _old_{table}")
+    conn.commit()
+
+
+def _migrate_run_cost(conn: sqlite3.Connection):
+    """Add cost/tokens/model/effort columns to an existing runs table (CREATE IF
+    NOT EXISTS won't add columns to a table that already exists)."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols:
+        return
+    for name, decl in (("cost", "REAL"), ("tokens", "INTEGER"),
+                       ("model", "TEXT"), ("effort", "TEXT")):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
+    conn.commit()
+
+
+def _migrate_run_review_links(conn: sqlite3.Connection):
+    """Add review-run linkage columns to existing runs tables."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols:
+        return
+    for name, decl in (
+        ("parent_run_id", "INTEGER REFERENCES runs(id) ON DELETE SET NULL"),
+        ("branch", "TEXT"),
+        ("pr_url", "TEXT"),
+    ):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
+    conn.commit()
+
+
+def _migrate_skill_queue(conn: sqlite3.Connection):
+    """Add source/force columns to an existing skill_queue table (for manually
+    triggered skill runs)."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(skill_queue)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols:
+        return
+    if "source" not in cols:
+        conn.execute("ALTER TABLE skill_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'cron'")
+    if "force" not in cols:
+        conn.execute("ALTER TABLE skill_queue ADD COLUMN force INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
+
+
 def init_db() -> sqlite3.Connection:
     EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -149,6 +248,11 @@ def init_db() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     _migrate_text_timestamps(conn)
     _migrate_verify_bug(conn)
+    _migrate_disposition(conn)
+    _migrate_action_needed(conn)
+    _migrate_run_cost(conn)
+    _migrate_run_review_links(conn)
+    _migrate_skill_queue(conn)
     conn.executescript(_read_schema())
     conn.commit()
     return conn
