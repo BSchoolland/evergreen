@@ -129,6 +129,10 @@ export function setConversationSessionFile(threadId, sessionFile) {
   db.prepare('UPDATE conversations SET session_file = ? WHERE thread_id = ?').run(sessionFile, threadId);
 }
 
+export function setConversationSessionId(threadId, sessionId) {
+  db.prepare('UPDATE conversations SET session_id = ? WHERE thread_id = ?').run(sessionId, threadId);
+}
+
 export function touchConversation(threadId) {
   db.prepare(
     "UPDATE conversations SET last_activity_at = cast(strftime('%s', 'now') as integer) WHERE thread_id = ?"

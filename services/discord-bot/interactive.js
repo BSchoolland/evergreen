@@ -2,16 +2,18 @@ import { spawn } from 'node:child_process';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PiThread } from './piThread.js';
+import { createAgentThread, getEngine, generateThreadName as generateThreadNameForEngine } from './agentThread.js';
 import {
   getConfig,
   getConversation,
   upsertConversation,
   setConversationStatus,
+  setConversationSessionId,
   touchConversation,
 } from './db.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../');
+const ENGINE = getEngine();
 const SESSIONS_ROOT = path.join(REPO, '.pi', 'sessions', 'threads');
 const EDIT_THROTTLE_MS = 900;
 const MAX_LEN = 1900; // headroom under Discord's 2000-char limit
@@ -61,10 +63,27 @@ function fallbackThreadName(seedText) {
   return trimThreadName(cleanSeedText(seedText) || 'New request');
 }
 
+// Engine-aware title generation: pi spawns `pi --mode text`; claude/codex use a
+// one-shot Agent SDK query via agentThread.generateThreadName.
 async function generateThreadName(seedText) {
   const cleanedSeed = cleanSeedText(seedText);
   const fallback = fallbackThreadName(cleanedSeed);
   if (!cleanedSeed) return fallback;
+
+  if (ENGINE !== 'pi') {
+    const name = await generateThreadNameForEngine(
+      ENGINE,
+      cleanedSeed,
+      null,
+      { model: getConfig('discord_claude_title_model') || undefined },
+    ).catch(() => '');
+    return trimThreadName(name) || fallback;
+  }
+
+  return generatePiThreadName(cleanedSeed, fallback);
+}
+
+async function generatePiThreadName(cleanedSeed, fallback) {
 
   const prompt = `Create a concise Discord thread title for this user message.\n\nRules:\n- Return only the title; no quotes, markdown, or explanation.\n- Maximum 8 words and 60 characters.\n- Base it on the user's actual request.\n\nUser message:\n${cleanedSeed.slice(0, 4000)}`;
 
@@ -171,15 +190,32 @@ export class InteractiveManager {
     return getConfig('project_path_interactive') || getConfig('project_path') || '';
   }
 
-  _getOrCreatePiThread(threadId, channel) {
+  _threadOpts(threadId) {
+    if (ENGINE === 'pi') {
+      return {
+        sessionDir: path.join(SESSIONS_ROOT, threadId),
+        projectPath: this._projectPath(),
+        model: getConfig('discord_model') || getConfig('pi_model') || null,
+        thinking: getConfig('discord_thinking') || null,
+      };
+    }
+    // claude (and codex fallback): resume the persisted SDK session id, if any.
+    // The conversations row seeds session_id with the thread id as a placeholder
+    // until the SDK reports a real one — treat that placeholder as "no session".
+    const conv = getConversation(threadId);
+    const storedSession = conv?.session_id && conv.session_id !== threadId ? conv.session_id : null;
+    return {
+      sessionId: storedSession,
+      projectPath: this._projectPath(),
+      model: getConfig('discord_claude_model') || null,
+      thinking: getConfig('discord_claude_effort') || null,
+    };
+  }
+
+  _getOrCreateThread(threadId, channel) {
     let pt = this.threads.get(threadId);
     if (pt) return pt;
-    pt = new PiThread(threadId, {
-      sessionDir: path.join(SESSIONS_ROOT, threadId),
-      projectPath: this._projectPath(),
-      model: getConfig('discord_model') || getConfig('pi_model') || null,
-      thinking: getConfig('discord_thinking') || null,
-    });
+    pt = createAgentThread(ENGINE, threadId, this._threadOpts(threadId));
     this.threads.set(threadId, pt);
     this.render.set(threadId, { channel, stream: null, statusMsg: null, statusLines: [], statusQueue: null, typing: null });
     this._wire(pt, threadId);
@@ -193,11 +229,12 @@ export class InteractiveManager {
   _formatTool(toolName, args) {
     const a = args || {};
     let detail = '';
-    switch (toolName) {
+    // Lowercase so both pi (bash/read/…) and the Agent SDK (Bash/Read/…) match.
+    switch (String(toolName).toLowerCase()) {
       case 'bash': detail = a.command || ''; break;
-      case 'read': case 'edit': case 'write': case 'ls': detail = a.path || a.file || ''; break;
+      case 'read': case 'edit': case 'write': case 'ls': detail = a.path || a.file || a.file_path || ''; break;
       case 'grep': detail = a.pattern || ''; break;
-      case 'find': detail = a.pattern || a.glob || a.query || ''; break;
+      case 'glob': case 'find': detail = a.pattern || a.glob || a.query || ''; break;
       default: detail = Object.values(a).find((v) => typeof v === 'string') || '';
     }
     detail = String(detail).replace(/\s+/g, ' ').trim();
@@ -247,6 +284,11 @@ export class InteractiveManager {
   }
 
   _wire(pt, threadId) {
+    // claude: persist the SDK session id so the conversation resumes after idle
+    // eviction or a bot restart. (pi tracks its session on disk via sessionDir.)
+    pt.on('session', (sessionId) => {
+      try { setConversationSessionId(threadId, sessionId); } catch (err) { console.error('persist session:', err.message); }
+    });
     pt.on('agentStart', () => {
       const st = this._state(threadId);
       if (st) { st.stream = null; st.statusLines = []; st.statusMsg = null; st.statusQueue = null; }
@@ -290,6 +332,7 @@ export class InteractiveManager {
       this._stopTyping(threadId);
       if (info.expectedExitReason === 'idle') return;
       if (info.expectedExitReason === 'shutdown') return;
+      if (info.expectedExitReason === 'abort') return;
 
       const exitedUnexpectedly = (code !== 0 && code !== null) || !!info.signal;
       if (exitedUnexpectedly) {
@@ -350,7 +393,7 @@ export class InteractiveManager {
     const pendingReqId = this.pendingInput.get(threadId);
     if (pendingReqId) {
       this.pendingInput.delete(threadId);
-      const pt = this.threads.get(threadId) || this._getOrCreatePiThread(threadId, message.channel);
+      const pt = this.threads.get(threadId) || this._getOrCreateThread(threadId, message.channel);
       pt.respondUI(pendingReqId, { value: message.content });
       return;
     }
@@ -360,7 +403,7 @@ export class InteractiveManager {
       // unknown thread — only adopt it if it's one of ours (best effort: ignore)
       return;
     }
-    const pt = this._getOrCreatePiThread(threadId, message.channel);
+    const pt = this._getOrCreateThread(threadId, message.channel);
     touchConversation(threadId);
     setConversationStatus(threadId, 'active');
     pt.prompt(message.content);
@@ -386,7 +429,7 @@ export class InteractiveManager {
     }
     const sessionDir = path.join(SESSIONS_ROOT, thread.id);
     upsertConversation(thread.id, message.channel.id, thread.id, null, {});
-    const pt = this._getOrCreatePiThread(thread.id, thread);
+    const pt = this._getOrCreateThread(thread.id, thread);
     await thread.send('Thread created').catch(() => {});
     if (seedText && seedText.trim()) pt.prompt(seedText.trim());
   }
@@ -398,7 +441,8 @@ export class InteractiveManager {
       await interaction.reply({ content: 'Only the owner can approve actions.', ephemeral: true }).catch(() => {});
       return;
     }
-    const m = interaction.customId.match(/^ui:([^:]+):(\d+)$/);
+    // Greedy id capture (id may itself contain separators); the trailing :<idx> anchors the index.
+    const m = interaction.customId.match(/^ui:(.+):(\d+)$/);
     if (!m) return;
     const [, reqId, idxStr] = m;
     const pending = this.pendingUI.get(reqId);

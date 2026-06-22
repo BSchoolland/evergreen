@@ -299,6 +299,7 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
     cli = get_cli()
     session_id = None
     session_dir = None
+    claude_stdout = None
     run_cwd = None
     run_env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
     if cli == "claude":
@@ -337,6 +338,7 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
             summary += f" stderr={result.stderr[:200]}"
         if cli == "claude":
             session_id = extract_session_id(result.stdout)
+            claude_stdout = result.stdout
         log.info("Finished skill %s: %s", skill, summary)
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - started
@@ -357,6 +359,7 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
 
     if cli == "claude" and session_id:
         run_summary(run_id, session_id=session_id)
+        record_run_cost_claude(run_id, claude_stdout)
     elif cli == "pi" and session_dir:
         run_summary(run_id, session_dir=session_dir)
         # Record cost AFTER the summary step so the run total includes it.
@@ -382,6 +385,33 @@ def record_run_cost(run_id: int, session_dir: Path):
     conn.commit()
     conn.close()
     log.info("Run %d: $%.4f, %d tokens, %s/%s", run_id, cost or 0, tokens or 0, model, effort)
+
+
+def record_run_cost_claude(run_id: int, json_output: str):
+    """Record cost/tokens/model from `claude -p --output-format json` so cost
+    tracking works on the claude engine, not just pi. Mirrors record_run_cost."""
+    if not json_output:
+        return
+    try:
+        data = json.loads(json_output)
+    except (json.JSONDecodeError, TypeError):
+        return
+    cost = data.get("total_cost_usd")
+    usage = data.get("usage") or {}
+    tokens = None
+    if isinstance(usage, dict):
+        tokens = sum(v for v in usage.values() if isinstance(v, int)) or None
+    model = data.get("model")
+    if cost is None and tokens is None and model is None:
+        return
+    conn = get_connection()
+    conn.execute(
+        "UPDATE runs SET cost = ?, tokens = ?, model = ?, effort = ? WHERE id = ?",
+        (cost, tokens, model, None, run_id),
+    )
+    conn.commit()
+    conn.close()
+    log.info("Run %d (claude): $%.4f, %s tokens, %s", run_id, cost or 0, tokens or 0, model)
 
 
 def extract_session_id(json_output: str) -> str | None:
