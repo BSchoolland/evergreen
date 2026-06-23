@@ -1,6 +1,9 @@
 Handle a critical issue identified during triage. Only use this for situations where production or staging is actively down, or a critical security vulnerability is being actively exploited — where no reasonable argument could be made that we should wait.
 
-Use `/read-config-evergreen` to get the project path, owner name, and SSH aliases.
+Use `/read-config-evergreen` to get the project path, owner name, and SSH aliases. It also
+resolves `EVERGREEN_PROJECT_ID` — the project you're scoped to. When set, scope every
+`bugs` / `security_alerts` query and `runs` log to that project and pass
+`--project-id "$EVERGREEN_PROJECT_ID"` to any record scripts; when unset, you're on project 1.
 
 Process:
 

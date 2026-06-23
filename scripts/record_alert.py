@@ -7,7 +7,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import get_connection
+from evergreen.db import current_project_id, get_connection
+
+
+def resolve_project_id(explicit=None):
+    return explicit if explicit is not None else (current_project_id() or 1)
 
 
 def record_alert(
@@ -23,14 +27,16 @@ def record_alert(
     pr_url=None,
     pr_status=None,
     discord_message_id=None,
+    project_id=None,
 ):
+    project_id = resolve_project_id(project_id)
     conn = get_connection()
     try:
         conn.execute(
             """INSERT INTO security_alerts
-               (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id),
+               (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id),
         )
         conn.commit()
         row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -45,8 +51,9 @@ def record_alert(
         conn.close()
 
 
-def record_batch(alerts):
+def record_batch(alerts, project_id=None):
     """Insert multiple alerts from a list of dicts. Returns (inserted, skipped) counts."""
+    project_id = resolve_project_id(project_id)
     conn = get_connection()
     inserted, skipped = 0, 0
     try:
@@ -54,9 +61,10 @@ def record_batch(alerts):
             try:
                 conn.execute(
                     """INSERT INTO security_alerts
-                       (source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
+                        project_id,
                         a["source"],
                         a.get("source_url"),
                         a.get("article_url"),
@@ -86,12 +94,18 @@ def record_batch(alerts):
     return inserted, skipped
 
 
-def list_alerts(limit=20):
+def list_alerts(limit=20, project_id=None, all_projects=False):
     conn = get_connection()
+    where = ""
+    params = []
+    if not all_projects:
+        where = "WHERE project_id = ?"
+        params.append(resolve_project_id(project_id))
+    params.append(limit)
     rows = conn.execute(
-        """SELECT id, created_at, source, cve, name, severity, affected_component, summary, status
-           FROM security_alerts ORDER BY created_at DESC LIMIT ?""",
-        (limit,),
+        f"""SELECT id, created_at, source, cve, name, severity, affected_component, summary, status
+           FROM security_alerts {where} ORDER BY created_at DESC LIMIT ?""",
+        params,
     ).fetchall()
     conn.close()
     if not rows:
@@ -122,11 +136,16 @@ def main():
     add.add_argument("--pr-url")
     add.add_argument("--pr-status", choices=["open", "merged", "closed"])
     add.add_argument("--discord-message-id")
+    add.add_argument("--project-id", type=int)
 
     batch = sub.add_parser("batch", help="Add alerts from JSON file or stdin")
     batch.add_argument("file", nargs="?", default="-")
+    batch.add_argument("--project-id", type=int)
 
-    sub.add_parser("list", help="List recent alerts")
+    ls = sub.add_parser("list", help="List recent alerts")
+    ls.add_argument("--limit", type=int, default=20)
+    ls.add_argument("--project-id", type=int)
+    ls.add_argument("--all", action="store_true", help="Show alerts across all projects")
 
     args = parser.parse_args()
 
@@ -144,15 +163,16 @@ def main():
             pr_url=args.pr_url,
             pr_status=args.pr_status,
             discord_message_id=args.discord_message_id,
+            project_id=args.project_id,
         )
     elif args.command == "batch":
         if args.file == "-":
             alerts = json.load(sys.stdin)
         else:
             alerts = json.load(open(args.file))
-        record_batch(alerts)
+        record_batch(alerts, project_id=args.project_id)
     elif args.command == "list":
-        list_alerts()
+        list_alerts(limit=args.limit, project_id=args.project_id, all_projects=args.all)
     else:
         parser.print_help()
 

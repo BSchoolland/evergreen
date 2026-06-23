@@ -19,23 +19,29 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from evergreen.db import epoch, get_cli, get_config, get_connection, get_project_path, init_db
+from evergreen import uptime
+from evergreen.db import (
+    EVERGREEN_DIR,
+    compute_cost,
+    epoch,
+    get_cli,
+    get_config,
+    get_connection,
+    list_projects,
+    project_config_value,
+    init_db,
+)
 from evergreen.pi_usage import session_metrics
+from evergreen.tiers import seed_project_cron
 
-LOG_PATH = Path.home() / ".evergreen" / "server.log"
-PID_PATH = Path.home() / ".evergreen" / "server.pid"
+LOG_PATH = EVERGREEN_DIR / "server.log"
+PID_PATH = EVERGREEN_DIR / "server.pid"
 SYNC_SKILLS_SCRIPT = REPO / "scripts" / "sync-pi-skills.py"
 
-# Detection skills run on a schedule. verify-bug and triage are triggered
-# after detection, not independently scheduled.
-SCHEDULED_SKILLS = ["check-bugs", "hackernews-monitor", "tacos-audit", "update-status"]
-
-SCHEDULE_DEFAULTS = {
-    "check-bugs": 60,
-    "hackernews-monitor": 360,
-    "tacos-audit": 1440,
-    "update-status": 240,
-}
+# verify-bug and triage are triggered per-project when there's work, not scheduled
+# through cron_jobs. Which detection skills a project runs comes from its cron_jobs
+# rows (seeded from its type + depth tier — see evergreen.tiers).
+TRIGGERED_SKILLS = ["verify-bug", "triage"]
 
 MAX_VERIFY_RUNS = 5
 
@@ -136,36 +142,39 @@ logging.basicConfig(
 log = logging.getLogger("evergreen-server")
 
 
-# --- Preconditions: return True if the skill has work to do ---
+# --- Preconditions: return True if the skill has work to do for this project ---
 
-def has_new_bugs() -> bool:
+def has_new_bugs(project_id: int) -> bool:
     conn = get_connection()
     count = conn.execute(
-        "SELECT COUNT(*) FROM bugs WHERE status = 'new'"
+        "SELECT COUNT(*) FROM bugs WHERE status = 'new' AND project_id = ?", (project_id,)
     ).fetchone()[0]
     conn.close()
     return count > 0
 
 
-def has_triageable_items() -> bool:
+def has_triageable_items(project_id: int) -> bool:
     conn = get_connection()
     verified_bugs = conn.execute(
-        "SELECT COUNT(*) FROM bugs WHERE status IN ('verified', 'unverified')"
+        "SELECT COUNT(*) FROM bugs WHERE status IN ('verified', 'unverified') AND project_id = ?",
+        (project_id,),
     ).fetchone()[0]
     new_alerts = conn.execute(
-        "SELECT COUNT(*) FROM security_alerts WHERE status = 'new'"
+        "SELECT COUNT(*) FROM security_alerts WHERE status = 'new' AND project_id = ?",
+        (project_id,),
     ).fetchone()[0]
     conn.close()
     return (verified_bugs + new_alerts) > 0
 
 
-def has_in_progress_items() -> bool:
+def has_in_progress_items(project_id: int) -> bool:
     conn = get_connection()
     bugs = conn.execute(
-        "SELECT COUNT(*) FROM bugs WHERE status = 'in_progress'"
+        "SELECT COUNT(*) FROM bugs WHERE status = 'in_progress' AND project_id = ?", (project_id,)
     ).fetchone()[0]
     alerts = conn.execute(
-        "SELECT COUNT(*) FROM security_alerts WHERE status = 'in_progress'"
+        "SELECT COUNT(*) FROM security_alerts WHERE status = 'in_progress' AND project_id = ?",
+        (project_id,),
     ).fetchone()[0]
     conn.close()
     return (bugs + alerts) > 0
@@ -180,30 +189,30 @@ PRECONDITIONS = {
 
 # --- Queue management ---
 
-def enqueue(skill: str, source: str = "cron", force: bool = False):
+def enqueue(project_id: int, skill: str, source: str = "cron", force: bool = False):
     conn = get_connection()
-    # Cron enqueues are de-duped (the scheduler may re-fire while one is pending).
-    # Manual triggers are always inserted — the user asked for this specific run.
+    # Cron enqueues are de-duped per (project, skill) — the scheduler may re-fire
+    # while one is pending. Manual triggers are always inserted.
     if source == "cron":
         already = conn.execute(
-            "SELECT 1 FROM skill_queue WHERE skill = ? AND status IN ('pending', 'running')",
-            (skill,),
+            "SELECT 1 FROM skill_queue WHERE project_id = ? AND skill = ? AND status IN ('pending', 'running')",
+            (project_id, skill),
         ).fetchone()
         if already:
-            log.info("Skill %s already queued or running, skipping", skill)
             conn.close()
             return
     conn.execute(
-        "INSERT INTO skill_queue (skill, source, force) VALUES (?, ?, ?)",
-        (skill, source, 1 if force else 0),
+        "INSERT INTO skill_queue (project_id, skill, source, force) VALUES (?, ?, ?, ?)",
+        (project_id, skill, source, 1 if force else 0),
     )
     conn.commit()
     conn.close()
-    log.info("Enqueued skill: %s (source=%s, force=%s)", skill, source, force)
+    log.info("Enqueued skill: p%d/%s (source=%s, force=%s)", project_id, skill, source, force)
 
 
-def pop_next() -> tuple[int, str, str, int] | None:
+def pop_next() -> tuple[int, int, str, str, int] | None:
     conn = get_connection()
+    # One agent run at a time across ALL projects (the chosen concurrency model).
     running = conn.execute(
         "SELECT 1 FROM skill_queue WHERE status = 'running'"
     ).fetchone()
@@ -212,12 +221,12 @@ def pop_next() -> tuple[int, str, str, int] | None:
         return None
 
     row = conn.execute(
-        "SELECT id, skill, source, force FROM skill_queue WHERE status = 'pending' ORDER BY queued_at LIMIT 1"
+        "SELECT id, project_id, skill, source, force FROM skill_queue WHERE status = 'pending' ORDER BY queued_at LIMIT 1"
     ).fetchone()
     conn.close()
     if not row:
         return None
-    return row[0], row[1], row[2], row[3]
+    return row[0], row[1], row[2], row[3], row[4]
 
 
 def skip(queue_id: int, skill: str):
@@ -249,41 +258,44 @@ def drain_queue():
     item = pop_next()
     if not item:
         return
-    queue_id, skill, source, force = item
+    queue_id, project_id, skill, source, force = item
 
     # Manual triggers can force-run regardless of preconditions (for testing a
     # skill even when it has no pending work). Cron runs always honor them.
     check = PRECONDITIONS.get(skill)
-    if check and not force and not check():
+    if check and not force and not check(project_id):
         skip(queue_id, skill)
         return
 
     mark_running(queue_id)
     # Manual runs are tagged manual:<skill> so they're distinguishable on the
     # timeline, and they don't disturb the cron schedule (last_run_at).
-    run_skill(skill, queue_id,
+    run_skill(project_id, skill, queue_id,
               run_type=f"{source}:{skill}",
               update_schedule=(source == "cron"))
     mark_done(queue_id)
 
     if source == "cron" and skill == "verify-bug":
-        maybe_requeue_verify()
+        maybe_requeue_verify(project_id)
 
 
-def maybe_requeue_verify():
-    if not has_new_bugs():
+def maybe_requeue_verify(project_id: int):
+    if not has_new_bugs(project_id):
         return
     conn = get_connection()
     recent = conn.execute(
-        "SELECT COUNT(*) FROM skill_queue WHERE skill = 'verify-bug' AND status = 'done' AND started_at > ?",
-        (epoch() - 3600,),
+        "SELECT COUNT(*) FROM skill_queue WHERE project_id = ? AND skill = 'verify-bug' "
+        "AND status = 'done' AND started_at > ?",
+        (project_id, epoch() - 3600),
     ).fetchone()[0]
     conn.close()
     if recent < MAX_VERIFY_RUNS:
-        log.info("Still new bugs after verify-bug, re-enqueuing (%d/%d)", recent + 1, MAX_VERIFY_RUNS)
-        enqueue("verify-bug")
+        log.info("Still new bugs in p%d after verify-bug, re-enqueuing (%d/%d)",
+                 project_id, recent + 1, MAX_VERIFY_RUNS)
+        enqueue(project_id, "verify-bug")
     else:
-        log.info("Hit max verify-bug runs (%d) this cycle, moving on", MAX_VERIFY_RUNS)
+        log.info("Hit max verify-bug runs (%d) for p%d this cycle, moving on",
+                 MAX_VERIFY_RUNS, project_id)
 
 
 # --- Skill execution ---
@@ -300,10 +312,7 @@ def sync_pi_skills():
         log.warning("Failed to sync pi skills: %s", e)
 
 
-def reset_project_branch():
-    # The watchdog server has no EVERGREEN_PROJECT_PATH in its own env, so this
-    # resolves to the `project_path` config — the watchdog's clone (clone A).
-    project_path = get_project_path()
+def reset_project_branch(project_path: str | None):
     if not project_path:
         return
     try:
@@ -320,24 +329,39 @@ def reset_project_branch():
         log.warning("Failed to reset project branch: %s", e)
 
 
-def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: bool = True):
+def _cron_model_override(project_id: int, skill: str) -> tuple[str | None, str | None]:
+    """Per-(project, skill) model/effort override stored on cron_jobs, if any."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT model, effort FROM cron_jobs WHERE project_id = ? AND skill = ?",
+        (project_id, skill),
+    ).fetchone()
+    conn.close()
+    return (row[0], row[1]) if row else (None, None)
+
+
+def run_skill(project_id: int, skill: str, queue_id: int, run_type: str = None,
+              update_schedule: bool = True):
     run_type = run_type or f"cron:{skill}"
-    log.info("Starting skill: %s (%s)", skill, run_type)
-    reset_project_branch()
+    log.info("Starting skill: p%d/%s (%s)", project_id, skill, run_type)
+    project_path = project_config_value(project_id, "project_path")
+    reset_project_branch(project_path)
 
     conn = get_connection()
     if update_schedule:
         conn.execute(
-            "UPDATE cron_jobs SET last_run_at = ? WHERE skill = ?",
-            (epoch(), skill),
+            "UPDATE cron_jobs SET last_run_at = ? WHERE project_id = ? AND skill = ?",
+            (epoch(), project_id, skill),
         )
         conn.commit()
     run_id = conn.execute(
-        "INSERT INTO runs (type, summary) VALUES (?, ?) RETURNING id",
-        (run_type, f"Running /{skill}-evergreen"),
+        "INSERT INTO runs (project_id, type, summary) VALUES (?, ?, ?) RETURNING id",
+        (project_id, run_type, f"Running /{skill}-evergreen"),
     ).fetchone()[0]
     conn.commit()
     conn.close()
+
+    over_model, over_effort = _cron_model_override(project_id, skill)
 
     started = time.monotonic()
     cli = get_cli()
@@ -347,9 +371,13 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
     claude_model = None
     claude_effort = None
     run_cwd = None
-    run_env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
+    run_env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id),
+               "EVERGREEN_PROJECT_ID": str(project_id),
+               "EVERGREEN_PROJECT_PATH": project_path or ""}
     if cli == "claude":
         claude_model, claude_effort = resolve_model_claude(skill)
+        claude_model = over_model or claude_model
+        claude_effort = over_effort or claude_effort
         cmd = ["claude", "-p", f"/{skill}-evergreen",
                "--dangerously-skip-permissions", "--output-format", "json",
                "--model", claude_model, "--effort", claude_effort]
@@ -360,13 +388,14 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
         session_dir = REPO / ".pi" / "sessions" / "watchdog" / f"run-{run_id}"
         cmd = ["pi", "-p", "--session-dir", str(session_dir)]
         model, thinking = resolve_model(skill)
+        model = over_model or model
+        thinking = over_effort or thinking
         if model:
             cmd += ["--model", model]
         if thinking:
             cmd += ["--thinking", thinking]
         cmd += [f"/skill:{skill}-evergreen"]
         run_cwd = str(REPO)
-        run_env = {**run_env, "EVERGREEN_PROJECT_PATH": get_project_path() or ""}
     else:
         cmd = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
                "exec", "--skip-git-repo-check", f"/{skill}-evergreen"]
@@ -406,15 +435,32 @@ def run_skill(skill: str, queue_id: int, run_type: str = None, update_schedule: 
     conn.close()
 
     if cli == "claude" and session_id:
-        run_summary(run_id, session_id=session_id)
+        run_summary(run_id, project_path, session_id=session_id)
         record_run_cost_claude(run_id, claude_stdout, model=claude_model, effort=claude_effort)
     elif cli == "pi" and session_dir:
-        run_summary(run_id, session_dir=session_dir)
+        run_summary(run_id, project_path, session_dir=session_dir)
         # Record cost AFTER the summary step so the run total includes it.
         record_run_cost(run_id, session_dir)
 
     deploy_lakebed()
 
+
+
+def _store_run_cost(run_id, model, effort, tokens, input_tokens, output_tokens, reported_cost):
+    """Persist a run's cost. Cost is NOTIONAL — computed from the model_pricing
+    table (compute_cost), so subscription/free models still carry budget weight.
+    Falls back to the provider-reported cost only when the model isn't priced."""
+    notional = compute_cost(model, input_tokens, output_tokens, tokens)
+    cost = notional if notional is not None else reported_cost
+    conn = get_connection()
+    conn.execute(
+        "UPDATE runs SET cost = ?, tokens = ?, input_tokens = ?, output_tokens = ?, model = ?, effort = ? WHERE id = ?",
+        (cost, tokens, input_tokens, output_tokens, model, effort, run_id),
+    )
+    conn.commit()
+    conn.close()
+    log.info("Run %d: $%.4f (notional=%s), %s tokens, %s/%s",
+             run_id, cost or 0, notional is not None, tokens or 0, model, effort)
 
 
 def record_run_cost(run_id: int, session_dir: Path):
@@ -425,42 +471,30 @@ def record_run_cost(run_id: int, session_dir: Path):
         return
     if cost is None and model is None:
         return
-    conn = get_connection()
-    conn.execute(
-        "UPDATE runs SET cost = ?, tokens = ?, model = ?, effort = ? WHERE id = ?",
-        (cost, tokens, model, effort, run_id),
-    )
-    conn.commit()
-    conn.close()
-    log.info("Run %d: $%.4f, %d tokens, %s/%s", run_id, cost or 0, tokens or 0, model, effort)
+    _store_run_cost(run_id, model, effort, tokens, None, None, cost)
 
 
 def record_run_cost_claude(run_id: int, json_output: str, model: str = None, effort: str = None):
     """Record cost/tokens/model/effort from `claude -p --output-format json` so cost
-    tracking works on the claude engine, not just pi. Mirrors record_run_cost.
-    The resolved model/effort (what we asked for) take precedence over the JSON."""
+    tracking works on the claude engine, not just pi. The resolved model/effort
+    (what we asked for) take precedence over the JSON."""
     if not json_output:
         return
     try:
         data = json.loads(json_output)
     except (json.JSONDecodeError, TypeError):
         return
-    cost = data.get("total_cost_usd")
+    reported_cost = data.get("total_cost_usd")
     usage = data.get("usage") or {}
-    tokens = None
+    input_tokens = output_tokens = tokens = None
     if isinstance(usage, dict):
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
         tokens = sum(v for v in usage.values() if isinstance(v, int)) or None
     model = model or data.get("model")
-    if cost is None and tokens is None and model is None:
+    if reported_cost is None and tokens is None and model is None:
         return
-    conn = get_connection()
-    conn.execute(
-        "UPDATE runs SET cost = ?, tokens = ?, model = ?, effort = ? WHERE id = ?",
-        (cost, tokens, model, effort, run_id),
-    )
-    conn.commit()
-    conn.close()
-    log.info("Run %d (claude): $%.4f, %s tokens, %s", run_id, cost or 0, tokens or 0, model)
+    _store_run_cost(run_id, model, effort, tokens, input_tokens, output_tokens, reported_cost)
 
 
 def extract_session_id(json_output: str) -> str | None:
@@ -471,7 +505,7 @@ def extract_session_id(json_output: str) -> str | None:
         return None
 
 
-def run_summary(run_id: int, session_id: str = None, session_dir: Path = None):
+def run_summary(run_id: int, project_path: str | None, session_id: str = None, session_dir: Path = None):
     """Resume the just-finished agent session to record what it did this run."""
     cli = get_cli()
     env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id)}
@@ -485,7 +519,7 @@ def run_summary(run_id: int, session_id: str = None, session_dir: Path = None):
             cwd = None
         elif cli == "pi" and session_dir:
             log.info("Resuming pi session in %s for work summary", session_dir)
-            env["EVERGREEN_PROJECT_PATH"] = get_project_path() or ""
+            env["EVERGREEN_PROJECT_PATH"] = project_path or ""
             cmd = ["pi", "-p", "--session-dir", str(session_dir), "--continue"]
             model, thinking = resolve_model("summary-of-work")
             if model:
@@ -527,49 +561,46 @@ def deploy_lakebed():
 # --- Scheduling ---
 
 def ensure_cron_jobs():
+    """Make sure every active project has its type+tier agent-plane schedule seeded.
+    Idempotent: existing (possibly hand-tuned) rows are preserved."""
+    for p in list_projects(include_inactive=False):
+        seed_project_cron(p["id"], p["type"], p["depth_tier"])
+
+
+def due_cron_skills(project_id: int) -> list[str]:
     conn = get_connection()
-    for skill in SCHEDULED_SKILLS:
-        row = conn.execute(
-            "SELECT 1 FROM cron_jobs WHERE skill = ?", (skill,)
-        ).fetchone()
-        if not row:
-            conn.execute(
-                "INSERT INTO cron_jobs (skill, interval_minutes) VALUES (?, ?)",
-                (skill, SCHEDULE_DEFAULTS[skill]),
-            )
-    conn.commit()
+    rows = conn.execute(
+        "SELECT skill, interval_minutes, enabled, last_run_at FROM cron_jobs WHERE project_id = ?",
+        (project_id,),
+    ).fetchall()
     conn.close()
-
-
-def is_due(skill: str) -> bool:
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT interval_minutes, enabled, last_run_at FROM cron_jobs WHERE skill = ?",
-        (skill,),
-    ).fetchone()
-    conn.close()
-
-    if not row:
-        return False
-    interval_minutes, enabled, last_run_at = row
-    if not enabled:
-        return False
-    if not last_run_at:
-        return True
-
-    return epoch() - last_run_at >= interval_minutes * 60
+    now = epoch()
+    due = []
+    for skill, interval, enabled, last_run_at in rows:
+        if not enabled:
+            continue
+        if not last_run_at or now - last_run_at >= interval * 60:
+            due.append(skill)
+    return due
 
 
 def tick():
-    enqueued_any = False
-    for skill in SCHEDULED_SKILLS:
-        if is_due(skill):
-            enqueue(skill)
-            enqueued_any = True
+    # Monitoring plane first — cheap, deterministic, every active project. Self-
+    # throttles per project, so it's safe to call every tick.
+    try:
+        uptime.run_sweep(log)
+    except Exception:
+        log.exception("uptime sweep failed")
 
-    if enqueued_any:
-        enqueue("verify-bug")
-        enqueue("triage")
+    # Agent plane — per (project, skill), then per-project triggered skills.
+    for p in list_projects(include_inactive=False):
+        pid = p["id"]
+        for skill in due_cron_skills(pid):
+            enqueue(pid, skill)
+        if has_new_bugs(pid):
+            enqueue(pid, "verify-bug")
+        if has_triageable_items(pid):
+            enqueue(pid, "triage")
 
     drain_queue()
 

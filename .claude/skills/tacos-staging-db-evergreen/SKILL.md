@@ -1,6 +1,6 @@
 # TACOS Staging Database
 
-Read-only access to the TACOS staging Supabase database (PostgreSQL).
+Applies to the TACOS `code_db` project (project 1). Read-only access to the TACOS staging Supabase database (PostgreSQL).
 
 ## Connection
 

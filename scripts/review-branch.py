@@ -31,7 +31,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from evergreen.db import epoch, get_connection, init_db
+from evergreen.db import current_project_id, epoch, get_connection, init_db
 from evergreen.pi_usage import session_metrics
 
 LENSES = {
@@ -97,12 +97,13 @@ def parse_parent_run_id(raw: str | None) -> int | None:
 
 def insert_run(run_type: str, summary: str, parent_run_id: int | None,
                branch: str | None, pr_url: str | None) -> int | None:
+    project_id = current_project_id() or 1
     conn = get_connection()
     try:
         row = conn.execute(
-            "INSERT INTO runs (type, summary, parent_run_id, branch, pr_url) "
-            "VALUES (?, ?, ?, ?, ?) RETURNING id",
-            (run_type, summary, parent_run_id, branch, pr_url),
+            "INSERT INTO runs (type, summary, parent_run_id, branch, pr_url, project_id) "
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            (run_type, summary, parent_run_id, branch, pr_url, project_id),
         ).fetchone()
         conn.commit()
         return row[0]

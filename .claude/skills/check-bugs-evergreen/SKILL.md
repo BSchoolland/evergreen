@@ -1,6 +1,10 @@
 # Check for Bugs
 
-Use `/read-config-evergreen` to get the project path, SSH aliases, and project name.
+Use `/read-config-evergreen` to get the project path, SSH aliases, and project name. It also
+resolves `EVERGREEN_PROJECT_ID` — the project you're scoped to this run. When it's set, pass
+`--project-id "$EVERGREEN_PROJECT_ID"` to `record_bug.py add`; `record_bug.py list` already
+scopes to that project automatically. When it's unset, omit the flag — the scripts default to
+project 1 (TACOS) and behave exactly as before.
 
 Query the project's databases on staging and production for the last 24 hours. Discover connection strings from the project's config, environment variables, or secrets manager. Use `\d table_name` before querying to discover schema — don't assume table or column names.
 
@@ -12,7 +16,7 @@ Your scope is strictly limited to:
 
 Do NOT file for style preferences, potential improvements, or things working correctly. Only file for demonstrable bugs or incomplete log entries. It is totally fine to find nothing.
 
-For each finding, cite specific log entry IDs/timestamps. Read the project codebase to confirm before recording. Record bugs with `python3 scripts/record_bug.py`.
+For each finding, cite specific log entry IDs/timestamps. Read the project codebase to confirm before recording. Record bugs with `python3 scripts/record_bug.py` (add `--project-id "$EVERGREEN_PROJECT_ID"` when scoped to a project).
 
 Once you've localized a finding to specific code, check that code's recent git history in the project repo (`git log`/`git log -p` on the relevant files, plus open PRs via `gh pr list`). A commit or deploy near the bug's first or last occurrence often explains it — a change that introduced it, or one that already fixed it (in which case mark it resolved rather than recording). A recent commit or open PR touching that code may mean someone is already on it — note that on the bug instead of treating it as new.
 

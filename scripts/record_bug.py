@@ -7,7 +7,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import epoch, get_connection
+from evergreen.db import current_project_id, epoch, get_connection
+
+
+def resolve_project_id(explicit=None):
+    return explicit if explicit is not None else (current_project_id() or 1)
 
 
 def record_bug(
@@ -18,16 +22,18 @@ def record_bug(
     source_query=None,
     occurrence_count=1,
     probable_root_cause=None,
+    project_id=None,
 ):
     now = epoch()
+    project_id = resolve_project_id(project_id)
     conn = get_connection()
     try:
         conn.execute(
             """INSERT INTO bugs
-               (environment, error_pattern, source_query, occurrence_count,
+               (project_id, environment, error_pattern, source_query, occurrence_count,
                 first_seen_at, last_seen_at, severity, summary, probable_root_cause)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (environment, error_pattern, source_query, occurrence_count,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, environment, error_pattern, source_query, occurrence_count,
              now, now, severity, summary, probable_root_cause),
         )
         conn.commit()
@@ -79,19 +85,24 @@ def bump_bug(bug_id, count=1):
         conn.close()
 
 
-def list_bugs(open_only=False, dismissed_only=False, limit=20):
+def list_bugs(open_only=False, dismissed_only=False, limit=20, project_id=None, all_projects=False):
     conn = get_connection()
+    clauses = []
+    params = []
     if dismissed_only:
-        where = "WHERE status = 'dismissed'"
+        clauses.append("status = 'dismissed'")
     elif open_only:
-        where = "WHERE status NOT IN ('resolved', 'dismissed')"
-    else:
-        where = ""
+        clauses.append("status NOT IN ('resolved', 'dismissed')")
+    if not all_projects:
+        clauses.append("project_id = ?")
+        params.append(resolve_project_id(project_id))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
     rows = conn.execute(
         f"""SELECT id, created_at, environment, severity, summary,
                    error_pattern, occurrence_count, status, last_seen_at
             FROM bugs {where} ORDER BY created_at DESC LIMIT ?""",
-        (limit,),
+        params,
     ).fetchall()
     conn.close()
     if not rows:
@@ -114,6 +125,7 @@ def main():
     add.add_argument("--source-query")
     add.add_argument("--occurrence-count", type=int, default=1)
     add.add_argument("--probable-root-cause")
+    add.add_argument("--project-id", type=int)
 
     up = sub.add_parser("update", help="Update a bug")
     up.add_argument("id", type=int)
@@ -135,6 +147,8 @@ def main():
     ls.add_argument("--open", action="store_true", help="Only show open bugs")
     ls.add_argument("--dismissed", action="store_true", help="Only show dismissed bugs")
     ls.add_argument("--limit", type=int, default=20)
+    ls.add_argument("--project-id", type=int)
+    ls.add_argument("--all", action="store_true", help="Show bugs across all projects")
 
     args = parser.parse_args()
 
@@ -147,6 +161,7 @@ def main():
             source_query=args.source_query,
             occurrence_count=args.occurrence_count,
             probable_root_cause=args.probable_root_cause,
+            project_id=args.project_id,
         )
     elif args.command == "update":
         update_bug(
@@ -163,7 +178,8 @@ def main():
     elif args.command == "bump":
         bump_bug(args.id, args.count)
     elif args.command == "list":
-        list_bugs(open_only=args.open, dismissed_only=args.dismissed, limit=args.limit)
+        list_bugs(open_only=args.open, dismissed_only=args.dismissed, limit=args.limit,
+                  project_id=args.project_id, all_projects=args.all)
     else:
         parser.print_help()
 

@@ -1,6 +1,11 @@
-Triage issues in the evergreen database (~/.evergreen/evergreen.db) across the `bugs` and `security_alerts` tables.
+Triage issues in the evergreen database (`${EVERGREEN_HOME:-$HOME/.evergreen}/evergreen.db`) across the `bugs` and `security_alerts` tables.
 
-Use `/read-config-evergreen` to get the project path, project name, and owner name.
+Use `/read-config-evergreen` to get the project path, project name, and owner name. It also
+resolves `EVERGREEN_PROJECT_ID` — the project you're scoped to this run. When it's set, every
+`bugs` / `security_alerts` query you run must filter `project_id = $EVERGREEN_PROJECT_ID`, and
+any `record_bug.py` / `record_alert.py` call must pass `--project-id "$EVERGREEN_PROJECT_ID"`
+(`record_bug.py list` scopes automatically). When it's unset, don't filter — you're operating
+on project 1 (TACOS), unchanged.
 
 Scan triageable issues: `verified` and `action_needed` bugs, and `new` security alerts. Pick what to work on this run: either the single most important issue, or a batch of low-importance ones that can be handled together. Use judgment — if something serious is in the queue, skip the noise and focus on it. Anything not picked up will be caught on subsequent runs.
 

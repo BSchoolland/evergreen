@@ -7,11 +7,14 @@ runs, so it gets a runs-table row with cost/model/effort and shows up on the
 timeline — tagged `manual:<skill>` so test runs are distinguishable from cron.
 
 Usage:
-  trigger-skill.py <skill> [--no-force]   # e.g. trigger-skill.py check-bugs
+  trigger-skill.py <skill> [--no-force] [--project <slug>|--project-id <id>]
   trigger-skill.py --list                 # list triggerable skills
 
 By default manual runs --force past preconditions (so you can test a skill even
 when it has no pending work). Pass --no-force to honor the precondition.
+
+The run is scoped to a project: --project-id <id> | --project <slug> | the
+EVERGREEN_PROJECT_ID env var | project 1.
 """
 import sys
 from pathlib import Path
@@ -19,10 +22,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from evergreen.db import epoch, get_connection
+from evergreen.db import EVERGREEN_DIR, current_project_id, epoch, get_connection, get_project_by_slug
 
 SKILLS_DIR = REPO / ".claude" / "skills"
-PID_PATH = Path.home() / ".evergreen" / "server.pid"
+PID_PATH = EVERGREEN_DIR / "server.pid"
 SUFFIX = "-evergreen"
 
 
@@ -49,17 +52,39 @@ def watchdog_running() -> bool:
         return False
 
 
+def resolve_project_id(args) -> int:
+    """Resolve project id from --project-id, --project <slug>, env, then 1."""
+    for i, a in enumerate(args):
+        if a == "--project-id" and i + 1 < len(args):
+            return int(args[i + 1])
+        if a == "--project" and i + 1 < len(args):
+            slug = args[i + 1]
+            p = get_project_by_slug(slug)
+            if not p:
+                print(f"Error: unknown project slug '{slug}'.", file=sys.stderr)
+                sys.exit(1)
+            return p["id"]
+    return current_project_id() or 1
+
+
 def main():
     args = [a for a in sys.argv[1:]]
     if not args or "--list" in args or "-l" in args:
         print("Triggerable skills:")
         for s in available_skills():
             print(f"  {s}")
-        print("\nUsage: trigger-skill.py <skill> [--no-force]")
+        print("\nUsage: trigger-skill.py <skill> [--no-force] [--project <slug>|--project-id <id>]")
         return
 
     force = "--no-force" not in args
-    positional = [a for a in args if not a.startswith("-")]
+    project_id = resolve_project_id(args)
+    # Drop option values so they aren't mistaken for the skill name.
+    skip = set()
+    for i, a in enumerate(args):
+        if a in ("--project", "--project-id") and i + 1 < len(args):
+            skip.add(i + 1)
+    positional = [a for i, a in enumerate(args)
+                  if not a.startswith("-") and i not in skip]
     if not positional:
         print("Error: no skill name given. Use --list to see options.", file=sys.stderr)
         sys.exit(1)
@@ -76,8 +101,8 @@ def main():
 
     conn = get_connection()
     conn.execute(
-        "INSERT INTO skill_queue (skill, source, force) VALUES (?, 'manual', ?)",
-        (skill, 1 if force else 0),
+        "INSERT INTO skill_queue (skill, source, force, project_id) VALUES (?, 'manual', ?, ?)",
+        (skill, 1 if force else 0, project_id),
     )
     conn.commit()
     pending = conn.execute(

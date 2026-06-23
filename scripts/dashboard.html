@@ -11,8 +11,10 @@
 
   /* Nav bar */
   .navbar { background: white; border-bottom: 1px solid #d4e4d4; padding: 0 32px; display: flex; align-items: center; height: 48px; }
-  .navbar-brand { font-size: 16px; font-weight: 700; color: #14532d; margin-right: 6px; }
+  .navbar-brand { font-size: 16px; font-weight: 700; color: #14532d; margin-right: 16px; }
   .navbar-project { font-size: 12px; color: #6b7c6b; margin-right: 32px; }
+  .project-select { font-size: 12px; color: #14532d; background: #f0f5f0; border: 1px solid #d4e4d4; border-radius: 6px; padding: 4px 8px; margin-right: 32px; cursor: pointer; font-family: inherit; }
+  .project-select:hover { border-color: #16a34a; }
   .navbar-tabs { display: flex; height: 100%; }
   .tab { padding: 0 16px; font-size: 13px; font-weight: 500; color: #6b7c6b; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; display: flex; align-items: center; height: 100%; }
   .tab:hover { color: #14532d; }
@@ -131,6 +133,43 @@
 
   .empty-state { padding: 40px; text-align: center; color: #6b7c6b; font-size: 13px; }
 
+  /* Overview grid */
+  .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .proj-card { background: white; border: 1px solid #d4e4d4; border-radius: 10px; padding: 18px 20px; cursor: pointer; transition: all 0.15s; }
+  .proj-card:hover { border-color: #16a34a; box-shadow: 0 2px 8px rgba(22,163,74,0.08); }
+  .proj-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .proj-card-name { font-size: 15px; font-weight: 700; color: #14532d; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .status-dot.up { background: #16a34a; }
+  .status-dot.down { background: #dc2626; }
+  .status-dot.unknown { background: #cbd5e1; }
+  .proj-card-sub { font-size: 11px; color: #8a9a8a; margin-bottom: 14px; }
+  .proj-metrics { display: flex; flex-wrap: wrap; gap: 14px 20px; }
+  .proj-metric .pm-val { font-size: 18px; font-weight: 700; color: #14532d; }
+  .proj-metric .pm-val.warn { color: #dc2626; }
+  .proj-metric .pm-lbl { font-size: 10px; color: #6b7c6b; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  /* Uptime strip */
+  .uptime-strip { display: flex; gap: 2px; align-items: flex-end; height: 28px; margin-top: 4px; }
+  .uptime-seg { flex: 1; min-width: 2px; height: 100%; border-radius: 2px; background: #cbd5e1; }
+  .uptime-seg.up { background: #16a34a; }
+  .uptime-seg.down { background: #dc2626; }
+  .uptime-seg:hover .tooltip { display: block; }
+  .uptime-seg { position: relative; }
+  .uptime-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .uptime-pct { font-size: 18px; font-weight: 700; color: #14532d; }
+
+  /* Budget */
+  .budget-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+  .budget-name { width: 140px; font-size: 12px; color: #1a2e1a; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .budget-track { flex: 1; height: 18px; background: #edf2ed; border-radius: 4px; overflow: hidden; }
+  .budget-fill { height: 100%; background: #16a34a; border-radius: 4px; }
+  .budget-amt { width: 72px; text-align: right; font-size: 12px; font-weight: 600; color: #14532d; flex-shrink: 0; }
+  .budget-total { font-size: 22px; font-weight: 700; color: #14532d; }
+  .window-bar { display: flex; gap: 6px; }
+  .window-btn { padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: 500; border: 1px solid #d4e4d4; background: white; color: #6b7c6b; cursor: pointer; }
+  .window-btn.active { background: #14532d; color: white; border-color: #14532d; }
+
   @media (max-width: 700px) {
     .tabs { overflow-x: auto; }
     .cal-panel.open { width: 300px; }
@@ -142,16 +181,25 @@
 
 <div class="navbar">
   <span class="navbar-brand">Evergreen</span>
-  <span class="navbar-project" id="projectName"></span>
+  <select class="project-select" id="projectSelect" onchange="onProjectChange(this.value)"></select>
   <div class="navbar-tabs">
-    <div class="tab active" onclick="switchTab('issues')">Issues</div>
+    <div class="tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="tab" onclick="switchTab('issues')">Issues</div>
     <div class="tab" onclick="switchTab('timeline')">Timeline</div>
     <div class="tab" onclick="switchTab('activity')">Activity</div>
+    <div class="tab" onclick="switchTab('budget')">Budget</div>
   </div>
 </div>
 
-<div class="tab-content active" id="tab-issues">
+<div class="tab-content active" id="tab-overview">
   <div class="content">
+    <div id="overviewGrid"></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-issues">
+  <div class="content">
+    <div id="uptimeStrip"></div>
     <div class="filter-bar" id="issueFilters"></div>
     <div id="issuesList"></div>
   </div>
@@ -178,25 +226,65 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-budget">
+  <div class="content">
+    <div id="budgetView"></div>
+  </div>
+</div>
+
 <script>
 let DATA = {};
+let PROJECTS = [];
+let currentProjectId = null;  // null = All projects
+
+function pq(extra) {
+  const params = new URLSearchParams();
+  if (currentProjectId != null) params.set('project_id', currentProjectId);
+  if (extra) for (const [k, v] of Object.entries(extra)) params.set(k, v);
+  const s = params.toString();
+  return s ? '?' + s : '';
+}
+
+async function loadProjects() {
+  PROJECTS = await fetch('/api/projects').then(r => r.json());
+  const sel = document.getElementById('projectSelect');
+  let opts = '<option value="">All projects</option>';
+  for (const p of PROJECTS) opts += `<option value="${p.id}">${esc(p.name)}</option>`;
+  sel.innerHTML = opts;
+  sel.value = currentProjectId == null ? '' : String(currentProjectId);
+}
 
 async function loadData() {
-  const [bugs, alerts, runs, stats, daily] = await Promise.all([
-    fetch('/api/bugs').then(r => r.json()),
-    fetch('/api/alerts').then(r => r.json()),
-    fetch('/api/runs').then(r => r.json()),
-    fetch('/api/stats').then(r => r.json()),
-    fetch('/api/daily-activity').then(r => r.json()),
+  const q = pq();
+  const [bugs, alerts, runs, stats, daily, uptime, budget] = await Promise.all([
+    fetch('/api/bugs' + q).then(r => r.json()),
+    fetch('/api/alerts' + q).then(r => r.json()),
+    fetch('/api/runs' + q).then(r => r.json()),
+    fetch('/api/stats' + q).then(r => r.json()),
+    fetch('/api/daily-activity' + q).then(r => r.json()),
+    fetch('/api/uptime' + pq({ hours: 24 })).then(r => r.json()),
+    fetch('/api/budget' + q).then(r => r.json()),
   ]);
-  DATA = { bugs, alerts, runs, stats, daily };
+  DATA = { bugs, alerts, runs, stats, daily, uptime, budget };
   renderAll();
 }
 
+function onProjectChange(val) {
+  currentProjectId = val === '' ? null : Number(val);
+  loadData();
+}
+
+function currentProject() {
+  return PROJECTS.find(p => p.id === currentProjectId) || null;
+}
+
 function renderAll() {
+  renderOverview();
+  renderUptimeStrip();
   renderIssues();
   renderTimeline();
   renderActivity();
+  renderBudget();
 }
 
 function switchTab(name) {
@@ -206,6 +294,148 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => {
     if (t.getAttribute('onclick') === `switchTab('${name}')`) t.classList.add('active');
   });
+}
+
+// ==================== OVERVIEW ====================
+function selectProjectAndView(pid) {
+  currentProjectId = pid;
+  document.getElementById('projectSelect').value = String(pid);
+  loadData();
+  switchTab('issues');
+}
+
+function renderOverview() {
+  const overview = (DATA.stats && DATA.stats.overview) || [];
+  if (!overview.length) {
+    document.getElementById('overviewGrid').innerHTML = '<div class="empty-state">No projects yet.</div>';
+    return;
+  }
+  let html = '<div class="overview-grid">';
+  for (const p of overview) {
+    const dotCls = p.is_up == null ? 'unknown' : (p.is_up ? 'up' : 'down');
+    const checked = p.last_checked_at ? `checked ${timeAgo(p.last_checked_at)}` : 'no checks yet';
+    const uptimeStr = p.uptime_pct == null ? '&mdash;' : p.uptime_pct + '%';
+    const proj = PROJECTS.find(x => x.id === p.id);
+    const tier = proj ? proj.depth_tier : '';
+    html += `<div class="proj-card" onclick="selectProjectAndView(${p.id})">
+      <div class="proj-card-head">
+        <span class="status-dot ${dotCls}" title="${dotCls}"></span>
+        <span class="proj-card-name">${esc(p.name)}</span>
+      </div>
+      <div class="proj-card-sub">${esc(p.type)}${tier ? ' &bull; ' + esc(tier) : ''} &bull; ${esc(p.status)} &bull; ${checked}</div>
+      <div class="proj-metrics">
+        <div class="proj-metric"><div class="pm-val">${uptimeStr}</div><div class="pm-lbl">Uptime 24h</div></div>
+        <div class="proj-metric"><div class="pm-val ${p.open_bugs ? 'warn' : ''}">${p.open_bugs}</div><div class="pm-lbl">Open bugs</div></div>
+        <div class="proj-metric"><div class="pm-val ${p.open_alerts ? 'warn' : ''}">${p.open_alerts}</div><div class="pm-lbl">Open alerts</div></div>
+        <div class="proj-metric"><div class="pm-val">$${(p.spend_7d || 0).toFixed(2)}</div><div class="pm-lbl">Spend 7d</div></div>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+  document.getElementById('overviewGrid').innerHTML = html;
+}
+
+// ==================== UPTIME STRIP ====================
+function renderUptimeStrip() {
+  const el = document.getElementById('uptimeStrip');
+  // Only meaningful on a single-project drilldown.
+  if (currentProjectId == null) { el.innerHTML = ''; return; }
+  const up = DATA.uptime || {};
+  const checks = up.checks || [];
+  const status = (up.status || []).find(s => s.project_id === currentProjectId) || null;
+  if (!checks.length && !status) { el.innerHTML = ''; return; }
+
+  const total = checks.length;
+  const upCount = checks.filter(c => c.is_up).length;
+  const pct = total ? (100 * upCount / total).toFixed(1) : '0.0';
+  const isUp = status ? status.is_up : (checks.length ? checks[checks.length - 1].is_up : null);
+  const dotCls = isUp == null ? 'unknown' : (isUp ? 'up' : 'down');
+  const lastChecked = status && status.last_checked_at ? timeAgo(status.last_checked_at) : '';
+  const ssl = status && status.ssl_expiry_days != null
+    ? ` &bull; SSL ${status.ssl_expiry_days}d` : '';
+
+  let segs = '';
+  for (const c of checks) {
+    const cls = c.is_up ? 'up' : 'down';
+    const code = c.status_code != null ? `HTTP ${c.status_code}` : (c.error || '');
+    const rt = c.response_time_ms != null ? ` &bull; ${c.response_time_ms}ms` : '';
+    segs += `<div class="uptime-seg ${cls}"><span class="tooltip">${formatTime(c.checked_at)} &bull; ${esc(code)}${rt}</span></div>`;
+  }
+  if (!segs) segs = '<div style="font-size:12px;color:#8a9a8a;padding:6px 0;">No uptime checks in the last 24h.</div>';
+
+  el.innerHTML = `<div class="card" style="padding:16px 20px;margin-bottom:16px;">
+    <div class="uptime-head">
+      <div class="section-label" style="margin:0;"><span class="status-dot ${dotCls}" style="display:inline-block;vertical-align:middle;margin-right:6px;"></span>Uptime &mdash; last 24h</div>
+      <div><span class="uptime-pct">${pct}%</span> <span style="font-size:11px;color:#6b7c6b;">${lastChecked ? 'checked ' + lastChecked : ''}${ssl}</span></div>
+    </div>
+    <div class="uptime-strip">${segs}</div>
+  </div>`;
+}
+
+// ==================== BUDGET ====================
+let budgetWindow = '7d';
+function setBudgetWindow(w) { budgetWindow = w; renderBudget(); }
+
+function renderBudget() {
+  const b = DATA.budget || {};
+  const byProject = b.by_project || [];
+  const bySkill = b.by_skill || [];
+  const totals = b.totals || {};
+  const winLabels = { '7d': 'Last 7 days', '30d': 'Last 30 days', 'mtd': 'Month to date' };
+
+  const projSpend = byProject.map(p => ({ name: p.name, amt: p[budgetWindow] || 0 }))
+    .sort((a, b) => b.amt - a.amt);
+  const maxProj = Math.max(0.01, ...projSpend.map(p => p.amt));
+
+  let winBar = '<div class="window-bar">';
+  for (const w of ['7d', '30d', 'mtd']) {
+    winBar += `<div class="window-btn ${w===budgetWindow?'active':''}" onclick="setBudgetWindow('${w}')">${winLabels[w]}</div>`;
+  }
+  winBar += '</div>';
+
+  let projHtml = '';
+  for (const p of projSpend) {
+    const w = maxProj > 0 ? (100 * p.amt / maxProj) : 0;
+    projHtml += `<div class="budget-row">
+      <div class="budget-name">${esc(p.name)}</div>
+      <div class="budget-track"><div class="budget-fill" style="width:${w}%;"></div></div>
+      <div class="budget-amt">$${p.amt.toFixed(2)}</div>
+    </div>`;
+  }
+  if (!projHtml) projHtml = '<div class="empty-state">No spend recorded.</div>';
+
+  const maxSkill = Math.max(0.01, ...bySkill.map(s => s.cost));
+  let skillHtml = '';
+  for (const s of bySkill) {
+    if (!s.cost) continue;
+    const w = 100 * s.cost / maxSkill;
+    skillHtml += `<div class="budget-row">
+      <div class="budget-name">${esc(s.type)}</div>
+      <div class="budget-track"><div class="budget-fill" style="width:${w}%;background:#5b21b6;"></div></div>
+      <div class="budget-amt">$${s.cost.toFixed(2)}</div>
+    </div>`;
+  }
+  if (!skillHtml) skillHtml = '<div class="empty-state">No skill spend recorded.</div>';
+
+  document.getElementById('budgetView').innerHTML = `
+    <div class="section">
+      <div class="graph-header" style="margin-bottom:12px;">
+        <div class="graph-title">Spend by project</div>
+        ${winBar}
+      </div>
+      <div class="card" style="padding:8px 20px;">${projHtml}</div>
+    </div>
+    <div class="section" style="margin-top:28px;">
+      <div class="graph-stats" style="margin-top:0;padding-top:0;border:none;">
+        <div class="graph-stat"><div class="budget-total">$${(totals['7d']||0).toFixed(2)}</div><div class="lbl">Total 7d</div></div>
+        <div class="graph-stat"><div class="budget-total">$${(totals['30d']||0).toFixed(2)}</div><div class="lbl">Total 30d</div></div>
+        <div class="graph-stat"><div class="budget-total">$${(totals['mtd']||0).toFixed(2)}</div><div class="lbl">Month to date</div></div>
+      </div>
+    </div>
+    <div class="section" style="margin-top:28px;">
+      <div class="section-label">Spend by skill &mdash; last 30 days</div>
+      <div class="card" style="padding:8px 20px;">${skillHtml}</div>
+    </div>`;
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -709,7 +939,10 @@ function renderActivityGraph() {
 }
 
 // Init
-loadData();
+(async () => {
+  await loadProjects();
+  await loadData();
+})();
 </script>
 </body>
 </html>

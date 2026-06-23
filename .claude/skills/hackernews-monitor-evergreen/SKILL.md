@@ -1,6 +1,9 @@
 # HackerNews Security Monitor
 
-Use `/read-config-evergreen` to get the project name and project path.
+Use `/read-config-evergreen` to get the project name and project path. It also resolves
+`EVERGREEN_PROJECT_ID` — the project you're scoped to. When it's set, pass
+`--project-id "$EVERGREEN_PROJECT_ID"` to every `record_alert.py add` / `record_alert.py batch`
+call so alerts land on the right project; when unset, omit it (defaults to project 1).
 
 Scan HackerNews for security vulnerabilities relevant to the monitored project's stack. Read the project's `package.json` (or equivalent) to understand the dependency tree.
 
@@ -14,7 +17,7 @@ Scan HackerNews for security vulnerabilities relevant to the monitored project's
 
 4. For each confirmed vulnerability, assess: does this affect the project or its infrastructure? Check the project's dependency files for overlap, read the codebase as needed to understand exposure, and use `/server-access-evergreen` to check server versions if relevant.
 
-5. Record findings with `python3 scripts/record_alert.py add` or pipe a JSON array to `python3 scripts/record_alert.py batch`. Set severity based on impact to the project:
+5. Record findings with `python3 scripts/record_alert.py add` or pipe a JSON array to `python3 scripts/record_alert.py batch`. When scoped to a project, pass `--project-id "$EVERGREEN_PROJECT_ID"` so the alert lands on the right project. Set severity based on impact to the project:
    - **critical**: Project is vulnerable and the consequences are high
    - **high**: Project is affected but the consequences are not critical (CVE level high or lower)
    - **low**: Real vulnerability but limited or indirect exposure

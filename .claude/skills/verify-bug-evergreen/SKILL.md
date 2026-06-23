@@ -1,6 +1,10 @@
-Verify `new` bugs in the evergreen database (~/.evergreen/evergreen.db). Does NOT apply to security alerts — only the `bugs` table.
+Verify `new` bugs in the evergreen database (`${EVERGREEN_HOME:-$HOME/.evergreen}/evergreen.db`). Does NOT apply to security alerts — only the `bugs` table.
 
-Use `/read-config-evergreen` to get the project path, SSH aliases, and project name.
+Use `/read-config-evergreen` to get the project path, SSH aliases, and project name. It also
+resolves `EVERGREEN_PROJECT_ID` — the project you're scoped to this run. When it's set, scope
+your `bugs` queries to `project_id = $EVERGREEN_PROJECT_ID` and pass
+`--project-id "$EVERGREEN_PROJECT_ID"` to `record_bug.py` calls; when unset, you're on project 1
+(TACOS), unchanged.
 
 Pick one `new` bug per run. If multiple are queued, pick the highest severity.
 
@@ -12,7 +16,7 @@ Pick one `new` bug per run. If multiple are queued, pick the highest severity.
 
 3. **Design your experiment** — figure out what would prove or disprove the claimed root cause. Prioritize testing the *implicit* assumptions from step 2 — those are the ones most likely to be wrong and least likely to have been checked. Ask yourself: "What are at least two other explanations for the symptoms described?" before committing to an experiment.
 
-4. **Set up the experiment folder** — create `~/.evergreen/verifications/bug-<id>/` for your POC scripts, test files, and findings.
+4. **Set up the experiment folder** — create `${EVERGREEN_HOME:-$HOME/.evergreen}/verifications/<project_id>/bug-<id>/` (with `<project_id>` = `$EVERGREEN_PROJECT_ID`, or `1` when unset) for your POC scripts, test files, and findings. The per-project subfolder keeps verifications from colliding across projects.
 
 5. **Run the experiment**:
    - **API/integration issues**: make a real call, inspect the raw response. Don't just re-query the DB for the same symptoms check-bugs already found — that proves the symptom exists, not the cause.

@@ -6,7 +6,7 @@
 #   - discordbot : Discord front-end / interactive dev (services/discord-bot/index.js)
 set -euo pipefail
 
-EVERGREEN_DIR="$HOME/.evergreen"
+EVERGREEN_DIR="${EVERGREEN_HOME:-$HOME/.evergreen}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- watchdog ---

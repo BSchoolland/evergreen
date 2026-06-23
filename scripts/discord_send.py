@@ -11,11 +11,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import epoch
+from evergreen.db import EVERGREEN_DIR, epoch
 
-DB_PATH = Path.home() / ".evergreen" / "evergreen.db"
+DB_PATH = EVERGREEN_DIR / "evergreen.db"
 BOT_DIR = Path(__file__).resolve().parent.parent / "services" / "discord-bot"
-BOT_PID_FILE = Path.home() / ".evergreen" / "discord-bot.pid"
+BOT_PID_FILE = EVERGREEN_DIR / "discord-bot.pid"
 
 def get_conn():
     conn = sqlite3.connect(str(DB_PATH))

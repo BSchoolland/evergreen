@@ -150,12 +150,17 @@ def fetch_full_contexts_parallel(posts, max_workers=8):
     return enriched
 
 
-def get_tracked_urls():
-    """Return set of source_urls already in the security_alerts table."""
+def get_tracked_urls(project_id=None):
+    """Return set of source_urls already in the security_alerts table for the project."""
     try:
-        from evergreen.db import get_connection
+        from evergreen.db import current_project_id, get_connection
+        if project_id is None:
+            project_id = current_project_id() or 1
         conn = get_connection()
-        rows = conn.execute("SELECT source_url FROM security_alerts WHERE source_url IS NOT NULL").fetchall()
+        rows = conn.execute(
+            "SELECT source_url FROM security_alerts WHERE source_url IS NOT NULL AND project_id = ?",
+            (project_id,),
+        ).fetchall()
         conn.close()
         return {row[0] for row in rows}
     except Exception:

@@ -1,6 +1,11 @@
 # Update Issue Status
 
-Use `/read-config-evergreen` to get the project path, project name, owner name, and discord channel ID.
+Use `/read-config-evergreen` to get the project path, project name, owner name, and discord channel ID. It also
+resolves `EVERGREEN_PROJECT_ID` — the project you're scoped to this run. When it's set, every
+`bugs` / `security_alerts` query below must filter `project_id = $EVERGREEN_PROJECT_ID`, and any
+record-script call must pass `--project-id "$EVERGREEN_PROJECT_ID"`. When it's unset, don't
+filter — you're operating on project 1 (TACOS), unchanged. (`discord_messages` is not
+project-scoped; match replies to issues via `discord_message_id` as before.)
 
 Sync the status of all `in_progress` bugs and security alerts based on their linked PRs and Discord replies.
 

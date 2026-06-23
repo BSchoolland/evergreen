@@ -1,6 +1,8 @@
 # Dependency Audit
 
-Use `/read-config-evergreen` to get the project path and project name.
+Applies to `code_db` projects (a checked-out repo to audit). Use `/read-config-evergreen` to get
+the project path and project name; when `EVERGREEN_PROJECT_ID` is set, pass
+`--project-id "$EVERGREEN_PROJECT_ID"` to `record_alert.py`.
 
 Run a dependency audit on the monitored project and assess real risk.
 

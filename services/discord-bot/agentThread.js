@@ -4,7 +4,7 @@ import path from 'node:path';
 import { PiThread } from './piThread.js';
 import { ClaudeThread, generateClaudeThreadName } from './claudeThread.js';
 
-const CONFIG_PATH = path.join(homedir(), '.evergreen', 'config');
+const CONFIG_PATH = path.join(process.env.EVERGREEN_HOME || path.join(homedir(), '.evergreen'), 'config');
 
 /**
  * The interactive engine, read from ~/.evergreen/config (the same one-word file

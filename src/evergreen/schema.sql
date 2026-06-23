@@ -1,5 +1,40 @@
+-- Evergreen schema.
+--
+-- Two-tier model:
+--   * INSTANCE  = this whole DB / state dir ($EVERGREEN_HOME). Hard isolation
+--                 boundary (own Discord bot, own credentials). Never shares data
+--                 with another instance.
+--   * PROJECT   = a row in `projects`. An instance watches many projects. Almost
+--                 everything (bugs, alerts, runs, uptime) is keyed by project_id.
+--
+-- Two monitoring planes:
+--   * MONITORING plane = deterministic code crons (uptime/SSL). Writes
+--                        uptime_checks / project_status. ~free, every project.
+--   * AGENT plane      = judgment skills (check-bugs, triage, ...). Costs money,
+--                        scheduled per (project, skill) in cron_jobs, depth-tiered.
+
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  -- code_db: deep log/PR monitoring (TACOS-style). wordpress: alert-only WP
+  -- checks. static: uptime/SSL only.
+  type TEXT NOT NULL DEFAULT 'static' CHECK(type IN ('code_db', 'wordpress', 'static')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'archived')),
+  base_url TEXT,
+  -- Named depth preset (lite/standard/deep). Seeds cron_jobs intervals/models;
+  -- cron_jobs is the live source of truth after that (tunable per project).
+  depth_tier TEXT NOT NULL DEFAULT 'standard',
+  -- JSON blob of per-project, type-specific config: project_path, ssh_staging,
+  -- ssh_prod, wp_ssh, wp_path, alert_channel_id, uptime_enabled, etc. Kept as
+  -- JSON (not normalized rows) so new project types add keys with no migration.
+  config TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer))
+);
+
 CREATE TABLE IF NOT EXISTS bugs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   environment TEXT NOT NULL,
   error_pattern TEXT NOT NULL,
@@ -24,6 +59,7 @@ CREATE TABLE IF NOT EXISTS bugs (
 
 CREATE TABLE IF NOT EXISTS security_alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   source TEXT NOT NULL,
   source_url TEXT,
@@ -41,7 +77,7 @@ CREATE TABLE IF NOT EXISTS security_alerts (
   resolved_at INTEGER,
   disposition_reason TEXT,
   dismissed_by TEXT CHECK(dismissed_by IN ('verify', 'pr_closed', 'owner')),
-  UNIQUE(source, cve, source_url)
+  UNIQUE(project_id, source, cve, source_url)
 );
 
 CREATE TABLE IF NOT EXISTS discord_messages (
@@ -58,12 +94,15 @@ CREATE TABLE IF NOT EXISTS discord_messages (
 
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL DEFAULT 1,
   started_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   finished_at INTEGER,
   type TEXT NOT NULL,
   summary TEXT,
   cost REAL,
   tokens INTEGER,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
   model TEXT,
   effort TEXT,
   parent_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
@@ -71,15 +110,22 @@ CREATE TABLE IF NOT EXISTS runs (
   pr_url TEXT
 );
 
+-- Agent-plane schedule, per (project, skill). depth_tier seeds these rows;
+-- model/effort NULL = inherit the engine's per-skill code defaults.
 CREATE TABLE IF NOT EXISTS cron_jobs (
-  skill TEXT PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1,
+  skill TEXT NOT NULL,
   interval_minutes INTEGER NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
-  last_run_at INTEGER
+  last_run_at INTEGER,
+  model TEXT,
+  effort TEXT,
+  PRIMARY KEY (project_id, skill)
 );
 
 CREATE TABLE IF NOT EXISTS skill_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL DEFAULT 1,
   skill TEXT NOT NULL,
   queued_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   started_at INTEGER,
@@ -93,11 +139,47 @@ CREATE TABLE IF NOT EXISTS configs (
   value TEXT NOT NULL
 );
 
--- Interactive conversations: each Discord thread maps to one persistent pi session.
--- The "interactive dev" works in its own clone of the target repo (project_path_interactive);
--- the watchdog works in project_path. They share this DB but never share a working tree.
+-- Monitoring plane: one row per uptime probe (HTTP + TLS), per project.
+CREATE TABLE IF NOT EXISTS uptime_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  checked_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
+  is_up INTEGER NOT NULL,
+  status_code INTEGER,
+  response_time_ms INTEGER,
+  ssl_expiry_days INTEGER,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_uptime_project_time ON uptime_checks(project_id, checked_at);
+
+-- Current up/down state per project, plus alert debounce bookkeeping.
+CREATE TABLE IF NOT EXISTS project_status (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  is_up INTEGER,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  last_status_code INTEGER,
+  last_checked_at INTEGER,
+  last_response_time_ms INTEGER,
+  ssl_expiry_days INTEGER,
+  last_alert_sent_at INTEGER,
+  last_transition_at INTEGER
+);
+
+-- Notional model pricing. Cost is computed from tokens x these rates, NOT from
+-- what the provider actually billed — so subscription/free models still carry a
+-- comparable weight in the budget. Tune freely; values are dollars per 1M tokens.
+CREATE TABLE IF NOT EXISTS model_pricing (
+  model TEXT PRIMARY KEY,
+  input_per_mtok REAL NOT NULL DEFAULT 0,
+  output_per_mtok REAL NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer))
+);
+
+-- Interactive conversations: each Discord thread maps to one persistent agent
+-- session, scoped to one project's repo clone.
 CREATE TABLE IF NOT EXISTS conversations (
   thread_id TEXT PRIMARY KEY,
+  project_id INTEGER NOT NULL DEFAULT 1,
   channel_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   session_file TEXT,

@@ -2,7 +2,8 @@ import Database from 'better-sqlite3';
 import { homedir } from 'os';
 import path from 'path';
 
-const dbPath = path.join(homedir(), '.evergreen', 'evergreen.db');
+const stateDir = process.env.EVERGREEN_HOME || path.join(homedir(), '.evergreen');
+const dbPath = path.join(stateDir, 'evergreen.db');
 const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
