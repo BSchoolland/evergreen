@@ -1,36 +1,24 @@
 # Onboard a Project
 
-Interactive. Add a project to this evergreen instance and work out, with the owner,
-where its monitoring signal actually lives. Launched by `evergreen.py onboard [hint]`.
+Interactive, and the owner's first encounter with evergreen — so talk in plain terms,
+never the internal vocabulary (no "agent plane", "data note", or type names).
 
-Discover the project's data — don't assume it. Get the name and URL from the owner (a
-hint may be passed in). Pick a type — it just presets which agent skills run
-(`evergreen.tiers`): `static`/`wordpress` = monitoring plane only; `code_db`/`server_code`
-= full agent plane (the difference between those two is only what the data note says).
+Ask what they want kept an eye on and why — their goal, not a category. Collect whatever
+access reaching it needs (ssh alias, database credentials, secrets); ask for anything you
+can't find yourself.
 
-Then explore. Use the ssh aliases in `~/.ssh/config` (suggest matches for the domain),
-SSH in, and find what's really there: a database? pm2? docker? journald/systemd? an app
-log directory? a repo? Show the owner what you found and confirm it before relying on it.
+Explore and work it out: probe the URL, match a host in `~/.ssh/config`, get in if you
+can, and find where the project's real health signal lives (a database, logs via
+pm2/journald/docker, a repo).
 
-Write a one-paragraph **data note**: where the signal lives and the exact commands to
-reach it, with the project's real names filled in — e.g. "No DB; signal is the app's pm2
-logs (`pm2 logs <app>`) over its ssh alias" or "Postgres reachable via <connection>;
-discover schema before querying". This is what the detection skills read, so keep it
-concrete and short.
+Before setting anything up, tell them plainly everything evergreen will do here and how
+often — check uptime, read real data and logs from their system, scan security news daily
+for threats to their stack, open fixes for what it finds — and tune the depth to what they
+actually want. They should leave knowing exactly what it will do.
 
-Create it:
-```
-python3 scripts/project.py add --name "<name>" --type <type> --base-url <url> [--ssh <alias>] [--tier lite|standard|deep]
-python3 scripts/project.py set-config <id> data_note "<the note>"
-```
-Set `repo`, `wp_path`, `ssh_staging`/`ssh_prod` as the type needs. `add` runs a baseline
-uptime check — confirm the site came back reachable.
+Then do it with `scripts/project.py` (run it to see its commands): choose the type that
+matches the agreed depth, write a short data note — where the signal lives plus the exact
+commands to read it, real names filled in — and store the access and repo it needs.
+Confirm the baseline uptime check came back reachable, and recap in plain words.
 
-Verify the access you'll depend on actually works (ssh connects; the DB/logs are
-readable). If the project should get PR fixes, make sure a `repo` is configured.
-
-Re-running onboard on an existing project is how its data note stays current — re-explore
-and update it when the project changes (new logging, a migration, dockerized).
-
-Finish with `python3 scripts/project.py show <slug>` and a short summary. The watchdog
-picks the project up on its next tick — no restart needed.
+Re-run onboard anytime to re-explore and refresh a project's data note.
