@@ -13,9 +13,10 @@ SSH in, and find what's really there: a database? pm2? docker? journald/systemd?
 log directory? a repo? Show the owner what you found and confirm it before relying on it.
 
 Write a one-paragraph **data note**: where the signal lives and the exact commands to
-reach it — e.g. "No DB; signal is `pm2 logs benjamin-schoolland` on ssh personal-server"
-or "Postgres via SSM /x/DATABASE_URL on ssh staging/prod; find schema with `\d`". This is
-what the detection skills read, so keep it concrete and short.
+reach it, with the project's real names filled in — e.g. "No DB; signal is the app's pm2
+logs (`pm2 logs <app>`) over its ssh alias" or "Postgres reachable via <connection>;
+discover schema before querying". This is what the detection skills read, so keep it
+concrete and short.
 
 Create it:
 ```
