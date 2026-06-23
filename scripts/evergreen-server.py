@@ -349,9 +349,30 @@ def run_skill(project_id: int, skill: str, queue_id: int, run_type: str = None,
 
     conn = get_connection()
     if update_schedule:
+        # Advance the schedule anchor by whole intervals from the previous anchor
+        # instead of stamping "now". Stamping now folds the polling overshoot (the
+        # gap between when a job became due and the next 60s tick that noticed it,
+        # plus any time earlier skills in the same tick spent running) into the
+        # anchor, so each run drifts a few minutes later than the last. Snapping to
+        # the most recent interval boundary keeps a fixed phase, like wall-clock
+        # cron, and skips missed slots after downtime rather than firing repeatedly.
+        row = conn.execute(
+            "SELECT last_run_at, interval_minutes FROM cron_jobs "
+            "WHERE project_id = ? AND skill = ?",
+            (project_id, skill),
+        ).fetchone()
+        now = epoch()
+        prev_anchor, interval_min = (row[0], row[1]) if row else (None, None)
+        interval_sec = (interval_min or 0) * 60
+        if prev_anchor and interval_sec > 0 and now - prev_anchor >= interval_sec:
+            missed = (now - prev_anchor) // interval_sec
+            new_anchor = prev_anchor + missed * interval_sec
+        else:
+            # First run, missing interval, or a not-yet-due forced run: anchor now.
+            new_anchor = now
         conn.execute(
             "UPDATE cron_jobs SET last_run_at = ? WHERE project_id = ? AND skill = ?",
-            (epoch(), project_id, skill),
+            (new_anchor, project_id, skill),
         )
         conn.commit()
     run_id = conn.execute(
