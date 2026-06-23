@@ -370,7 +370,11 @@ def run_skill(project_id: int, skill: str, queue_id: int, run_type: str = None,
     claude_stdout = None
     claude_model = None
     claude_effort = None
-    run_cwd = None
+    # Always run the agent from the repo so it discovers the repo-local skills
+    # (.claude/skills for claude/codex, .pi/skills for pi). Otherwise a watchdog
+    # launched from $HOME (reboot/cron/ssh) resolves no slash command and every
+    # run dies instantly with "Unknown command: /<skill>-evergreen".
+    run_cwd = str(REPO)
     run_env = {**os.environ, "EVERGREEN_RUN_ID": str(run_id),
                "EVERGREEN_PROJECT_ID": str(project_id),
                "EVERGREEN_PROJECT_PATH": project_path or ""}
@@ -382,9 +386,9 @@ def run_skill(project_id: int, skill: str, queue_id: int, run_type: str = None,
                "--dangerously-skip-permissions", "--output-format", "json",
                "--model", claude_model, "--effort", claude_effort]
     elif cli == "pi":
-        # Run from the evergreen repo so pi discovers .pi/skills; point the agent
-        # at the watchdog's clone via EVERGREEN_PROJECT_PATH. A per-run session-dir
-        # lets the summary step resume this exact session with --continue.
+        # Point the agent at the watchdog's clone via EVERGREEN_PROJECT_PATH. A
+        # per-run session-dir lets the summary step resume this exact session
+        # with --continue. (cwd is the repo — set above for every engine.)
         session_dir = REPO / ".pi" / "sessions" / "watchdog" / f"run-{run_id}"
         cmd = ["pi", "-p", "--session-dir", str(session_dir)]
         model, thinking = resolve_model(skill)
@@ -395,7 +399,6 @@ def run_skill(project_id: int, skill: str, queue_id: int, run_type: str = None,
         if thinking:
             cmd += ["--thinking", thinking]
         cmd += [f"/skill:{skill}-evergreen"]
-        run_cwd = str(REPO)
     else:
         cmd = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
                "exec", "--skip-git-repo-check", f"/{skill}-evergreen"]

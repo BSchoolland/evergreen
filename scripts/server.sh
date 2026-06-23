@@ -45,9 +45,12 @@ start_watchdog() {
     echo "Watchdog already running (pid $(cat "$PID_FILE"))"
     return
   fi
-  nohup python3 "$SERVER_SCRIPT" >> "$LOG_FILE" 2>&1 &
+  # Start from the repo so skill runs resolve the repo-local .claude/.pi skills
+  # even when launched from $HOME (cron/reboot/ssh). `exec` makes the recorded
+  # PID python's own.
+  ( cd "$SCRIPT_DIR/.." && exec nohup python3 "$SERVER_SCRIPT" >> "$LOG_FILE" 2>&1 ) &
   echo $! > "$PID_FILE"
-  echo "Watchdog started (pid $!), logging to $LOG_FILE"
+  echo "Watchdog started (pid $(cat "$PID_FILE")), logging to $LOG_FILE"
 }
 
 start_bot() {
