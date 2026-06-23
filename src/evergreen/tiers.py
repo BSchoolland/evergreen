@@ -24,6 +24,9 @@ TYPE_SKILLS: dict[str, dict[str, int]] = {
         "hackernews-monitor": 1440,
         "tacos-audit": 4320,
         "update-status": 480,
+        # Cross-bug analysis: unstick stranded issues + consolidate recurring
+        # design flaws into themes. Infrequent.
+        "reconcile": 4320,
     },
     "wordpress": {},
     "static": {},

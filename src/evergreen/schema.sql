@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS bugs (
   status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'verified', 'unverified', 'blocked', 'not_actionable', 'in_progress', 'backlog', 'action_needed', 'resolved', 'dismissed')),
   resolved_at INTEGER,
   disposition_reason TEXT,
-  dismissed_by TEXT CHECK(dismissed_by IN ('verify', 'pr_closed', 'owner'))
+  dismissed_by TEXT CHECK(dismissed_by IN ('verify', 'pr_closed', 'owner')),
+  -- Optional link to the recurring theme (design flaw / tech debt) this bug is a symptom of.
+  theme_id INTEGER REFERENCES themes(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS security_alerts (
@@ -188,4 +190,30 @@ CREATE TABLE IF NOT EXISTS conversations (
   seed_issue_id INTEGER,
   created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   last_activity_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer))
+);
+
+-- Themes: recurring areas of the codebase that cause consistent problems.
+-- Distinct from a bug (a discrete incident): a theme is a root design cause that
+-- spawns a *class* of bugs. It is long-lived, demands a "worth it?" judgment rather
+-- than a quick patch, and is surfaced on the dashboard's Tech Debt tab. Bugs that
+-- are symptoms point back via bugs.theme_id. Themes are authored by cross-bug
+-- analysis (clustering verified root causes by subsystem), not by log watching.
+CREATE TABLE IF NOT EXISTS themes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
+  updated_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'design_flaw' CHECK(kind IN ('design_flaw', 'tech_debt', 'recurring_failure')),
+  subsystem TEXT NOT NULL,           -- the codebase area, e.g. "transcription pipeline"
+  summary TEXT NOT NULL,             -- the design analysis: what is wrong and why
+  evidence_paths TEXT,               -- grounding file:line anchors (newline-separated)
+  proposed_change TEXT,              -- the refactor that would resolve it
+  effort TEXT CHECK(effort IN ('S', 'M', 'L', 'XL')),
+  impact TEXT,                       -- what it costs to leave it unfixed
+  worth_it_verdict TEXT CHECK(worth_it_verdict IN ('worth', 'phased', 'not_worth')),
+  worth_it_reason TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'acknowledged', 'planned', 'in_progress', 'resolved', 'wont_fix')),
+  disposition_reason TEXT,
+  pr_url TEXT
 );

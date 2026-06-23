@@ -339,6 +339,36 @@ def _migrate_project_spine(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_themes_link(conn: sqlite3.Connection):
+    """Add the theme_id column linking a bug to its parent theme.
+
+    CREATE TABLE IF NOT EXISTS won't add a column to an existing bugs table, so we
+    add it here. ALTER TABLE ADD COLUMN can't carry a REFERENCES clause portably, so
+    the column is a plain INTEGER here (the canonical schema.sql keeps the FK for
+    fresh installs); writes are controlled, so FK enforcement isn't load-bearing."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bugs)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols or "theme_id" in cols:
+        return
+    conn.execute("ALTER TABLE bugs ADD COLUMN theme_id INTEGER")
+    conn.commit()
+
+
+def _migrate_themes_project(conn: sqlite3.Connection):
+    """Per-project themes: add project_id to an existing themes table (fresh installs
+    get it from schema.sql), backfilling existing rows to project 1."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(themes)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols or "project_id" in cols:
+        return
+    conn.execute("ALTER TABLE themes ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1")
+    conn.commit()
+
+
 def init_db() -> sqlite3.Connection:
     EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -354,6 +384,8 @@ def init_db() -> sqlite3.Connection:
     _migrate_project_spine(conn)
     conn.executescript(_read_schema())
     _seed_model_pricing(conn)
+    _migrate_themes_link(conn)
+    _migrate_themes_project(conn)
     conn.commit()
     return conn
 
