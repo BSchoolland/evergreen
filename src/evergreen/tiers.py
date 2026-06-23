@@ -24,7 +24,7 @@ from evergreen.db import epoch, get_connection
 _AGENT_PLANE = {
     "check-bugs": 720,
     "hackernews-monitor": 1440,
-    "tacos-audit": 4320,
+    "dependency-audit": 4320,
     "update-status": 480,
     # Cross-bug analysis: unstick stranded issues + consolidate recurring design
     # flaws into themes. Infrequent.

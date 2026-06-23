@@ -63,7 +63,7 @@ SKILL_MODELS = {
     # Read/classify/reconcile work — cheap model is fine, mistakes are visible and
     # self-correct on the next run.
     "update-status": {"model": "openai-codex/gpt-5.4-mini", "thinking": "low"},
-    "tacos-audit": {"model": "openai-codex/gpt-5.4-mini", "thinking": "medium"},
+    "dependency-audit": {"model": "openai-codex/gpt-5.4-mini", "thinking": "medium"},
     "hackernews-monitor": {"model": "openai-codex/gpt-5.4-mini", "thinking": "medium"},
     # Detector — mini/medium: ~$0.54/run (half of gpt-5.5/medium), finds real bugs.
     # It never notifies (detection-only); pings are gated behind verify-bug, so
@@ -101,7 +101,7 @@ CLAUDE_DEFAULT_EFFORT = "high"
 CLAUDE_SKILL_MODELS = {
     "summary-of-work": {"model": "haiku", "effort": "low"},
     "update-status": {"model": "sonnet", "effort": "low"},
-    "tacos-audit": {"model": "sonnet", "effort": "medium"},
+    "dependency-audit": {"model": "sonnet", "effort": "medium"},
     "hackernews-monitor": {"model": "sonnet", "effort": "medium"},
     "check-bugs": {"model": "sonnet", "effort": "medium"},
     # verify-bug, triage: inherit the claude default (opus / high).

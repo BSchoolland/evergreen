@@ -34,7 +34,7 @@ echo $! > ~/.evergreen/discord-bot.pid
 
 ## 3. Cron server
 
-Run `/setup-cron-evergreen` to let the user configure skill intervals (or accept the defaults: check-bugs every 1h, hackernews-monitor every 6h, tacos-audit every 24h, triage runs automatically after any check if new items exist).
+Run `/setup-cron-evergreen` to let the user configure skill intervals (or accept the defaults: check-bugs every 1h, hackernews-monitor every 6h, dependency-audit every 24h, triage runs automatically after any check if new items exist).
 
 Then start the server:
 ```bash
