@@ -14,9 +14,9 @@ pm2/journald/docker, a repo).
 Before setting anything up, make the owner understand what evergreen will actually do for
 this project. Learn it from the source rather than guessing — read its skills
 (`.claude/skills/`) and how they're scheduled (`evergreen.tiers` and the cron server) — then
-explain it plainly and in depth, including how often each thing runs and a rough monthly cost
-(use existing runs as a guide). Let them make it lighter or heavier; they should leave knowing
-what it will do and agreeing to it.
+explain it plainly and in depth, including the depth level you're proposing and how often each
+thing runs at it. Let them make it lighter or heavier; they should leave knowing what it will
+do and agreeing to it.
 
 Then do it with `scripts/project.py` (run it to see its commands): choose the type and tier
 matching the agreed depth, write a short data note — where the signal lives plus the exact
