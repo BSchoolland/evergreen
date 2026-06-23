@@ -6,13 +6,13 @@ resolves `EVERGREEN_PROJECT_ID` — the project you're scoped to this run. When 
 scopes to that project automatically. When it's unset, omit the flag — the scripts default to
 project 1 (TACOS) and behave exactly as before.
 
-Query the project's databases on staging and production for the last 24 hours. Discover connection strings from the project's config, environment variables, or secrets manager. Use `\d table_name` before querying to discover schema — don't assume table or column names.
+Examine the project's data sources for the last 24 hours. `/read-config-evergreen` returns the project's **data note** — where the signal actually lives and how to reach it (a database, application/server logs via pm2 / journalctl / docker, a log service, …). Follow it, and discover specifics at runtime rather than assuming structure (`\d` before querying a DB; tail the right logs for a server). If a project has no real data source beyond uptime, there's nothing to check here — that's fine.
 
 Your scope is strictly limited to:
 - **Errors**: Failures, unhandled exceptions, jobs erroring out. Identify probable root cause if possible.
 - **Logging gaps**: Fields that are null/empty when they shouldn't be, or missing event chains (e.g. job completion with no start).
 - **Data anomalies**: Negative balances, stuck jobs, conversations permanently in error state.
-- **Trend anomalies**: Compare today's numbers to the daily average from the past 7 days. Flag significant deviations in: request volume (total events by type), error rate, cost spend by category, conversation creation rate, scrape job volume/failure rate, and feature usage (group by path or business.action). A spike or drop worth flagging is roughly 2x or 0.5x the 7-day average — use judgment, don't be noisy about minor fluctuations.
+- **Trend anomalies**: Compare today against the 7-day daily average for whatever this project exposes (request/error volume, throughput, spend, feature usage). A spike or drop of roughly 2x or 0.5x is worth flagging — use judgment, don't be noisy about minor fluctuations.
 
 Do NOT file for style preferences, potential improvements, or things working correctly. Only file for demonstrable bugs or incomplete log entries. It is totally fine to find nothing.
 

@@ -17,12 +17,14 @@ CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  -- code_db: deep log/PR monitoring (TACOS-style). wordpress: alert-only WP
-  -- checks. static: uptime/SSL only.
-  type TEXT NOT NULL DEFAULT 'static' CHECK(type IN ('code_db', 'wordpress', 'static')),
+  -- A thin preset that selects which agent-plane skills run (see evergreen.tiers).
+  -- What the agent actually does is driven by the project's data_note, not the type.
+  -- Known types live in code (tiers.PROJECT_TYPES) — no DB CHECK, so adding a type
+  -- (server_code, etc.) needs no migration. Today: code_db, server_code, wordpress, static.
+  type TEXT NOT NULL DEFAULT 'static',
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'archived')),
   base_url TEXT,
-  -- Named depth preset (lite/standard/deep). Seeds cron_jobs intervals/models;
+  -- Named depth preset (lite/standard/deep) that seeds cron_jobs intervals/models.
   -- cron_jobs is the live source of truth after that (tunable per project).
   depth_tier TEXT NOT NULL DEFAULT 'standard',
   -- JSON blob of per-project, type-specific config: project_path, ssh_staging,

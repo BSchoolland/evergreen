@@ -18,18 +18,24 @@ from evergreen.db import epoch, get_connection
 #   code_db    : deep log/PR monitoring (TACOS-style)
 #   wordpress  : alert-only today — monitoring plane only (wp-cli/wpscan later)
 #   static     : monitoring plane only
+# The agent-plane skill set is the same for any project with a real data source +
+# repo; whether the signal is a database or server logs is decided by the project's
+# data_note, not by the type. code_db and server_code therefore share it.
+_AGENT_PLANE = {
+    "check-bugs": 720,
+    "hackernews-monitor": 1440,
+    "tacos-audit": 4320,
+    "update-status": 480,
+    # Cross-bug analysis: unstick stranded issues + consolidate recurring design
+    # flaws into themes. Infrequent.
+    "reconcile": 4320,
+}
+
 TYPE_SKILLS: dict[str, dict[str, int]] = {
-    "code_db": {
-        "check-bugs": 720,
-        "hackernews-monitor": 1440,
-        "tacos-audit": 4320,
-        "update-status": 480,
-        # Cross-bug analysis: unstick stranded issues + consolidate recurring
-        # design flaws into themes. Infrequent.
-        "reconcile": 4320,
-    },
-    "wordpress": {},
-    "static": {},
+    "code_db": dict(_AGENT_PLANE),       # repo + queryable database (TACOS-style)
+    "server_code": dict(_AGENT_PLANE),   # SSH-accessible app, signal in logs not a rich DB
+    "wordpress": {},                     # alert-only: monitoring plane only
+    "static": {},                        # monitoring plane only
 }
 
 # Depth tier scales the base intervals. Smaller multiplier = runs more often =

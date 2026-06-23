@@ -37,9 +37,13 @@ The effective config is the global `configs` rows with the project row + its
 - `project_type` ← `projects.type` (`code_db` | `wordpress` | `static`)
 - `base_url` ← `projects.base_url`
 - `depth_tier` ← `projects.depth_tier`
-- `project_path`, `project_path_interactive`, `ssh_staging`, `ssh_prod`,
-  `alert_channel_id`, `discord_channel_id`, etc. ← keys inside `projects.config`,
-  falling back to the global `configs` value when the project JSON omits them.
+- `project_path`, `project_path_interactive`, `ssh_staging`, `ssh_prod`, `ssh`,
+  `repo`, `alert_channel_id`, `discord_channel_id`, etc. ← keys inside
+  `projects.config`, falling back to the global `configs` value when omitted.
+- `data_note` ← a short paragraph (in `projects.config`) describing **where this
+  project's monitoring signal lives and how to reach it** — a database, app/server
+  logs (pm2 / journalctl / docker), etc. Detection skills follow it instead of
+  assuming a database. Written/updated by onboarding (`evergreen.py onboard`).
 
 One-liner to read a single project config key with global fallback:
 

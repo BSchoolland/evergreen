@@ -163,6 +163,21 @@ def cmd_status_change(args, status):
     print(f"#{p['id']} {p['name']} -> {status}")
 
 
+def cmd_delete(args):
+    p = _resolve(args.ident)
+    if p["id"] == 1:
+        sys.exit("Refusing to delete project 1 (the original instance project).")
+    from evergreen.db import get_connection
+    conn = get_connection()
+    for t in ("uptime_checks", "project_status", "cron_jobs", "skill_queue",
+              "bugs", "security_alerts", "runs", "themes"):
+        conn.execute(f"DELETE FROM {t} WHERE project_id = ?", (p["id"],))
+    conn.execute("DELETE FROM projects WHERE id = ?", (p["id"],))
+    conn.commit()
+    conn.close()
+    print(f"Deleted project #{p['id']} ({p['name']}) and all its rows.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Manage evergreen projects")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -186,6 +201,7 @@ def main():
 
     s = sub.add_parser("show"); s.add_argument("ident"); s.set_defaults(func=cmd_show)
     c = sub.add_parser("check"); c.add_argument("ident"); c.set_defaults(func=cmd_check)
+    dl = sub.add_parser("delete"); dl.add_argument("ident"); dl.set_defaults(func=cmd_delete)
 
     sc = sub.add_parser("set-config")
     sc.add_argument("ident"); sc.add_argument("key"); sc.add_argument("value")

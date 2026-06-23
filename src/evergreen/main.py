@@ -31,5 +31,12 @@ def main():
     else:
         cli = get_cli()
 
-    extra_args = sys.argv[1:]
-    launch_cli(cli, extra_args, first_run=first_run)
+    args = sys.argv[1:]
+    # `evergreen.py onboard [hint]` drops into an interactive session that explores
+    # a new project and writes its data note. Any trailing words are passed to the
+    # skill as a starting hint (e.g. a URL or name).
+    if args and args[0] == "onboard":
+        hint = " ".join(args[1:]).strip()
+        args = ["/onboard-project-evergreen" + (f" {hint}" if hint else "")]
+
+    launch_cli(cli, args, first_run=first_run)

@@ -273,7 +273,7 @@ def _migrate_project_spine(conn: sqlite3.Connection):
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           slug TEXT NOT NULL UNIQUE,
           name TEXT NOT NULL,
-          type TEXT NOT NULL DEFAULT 'static' CHECK(type IN ('code_db', 'wordpress', 'static')),
+          type TEXT NOT NULL DEFAULT 'static',
           status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'archived')),
           base_url TEXT,
           depth_tier TEXT NOT NULL DEFAULT 'standard',
@@ -356,6 +356,42 @@ def _migrate_themes_link(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_projects_type_open(conn: sqlite3.Connection):
+    """Drop the legacy CHECK(type IN (...)) on projects.type so new project types
+    (server_code, etc.) need no schema migration — types are validated in code now.
+    Rebuilds the table from the current schema when the old CHECK is still present."""
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return
+    if not row or not row[0] or "CHECK(type" not in row[0]:
+        return
+    schema = _read_schema()
+    create_new = None
+    for stmt in schema.split(";"):
+        if "CREATE TABLE IF NOT EXISTS projects" in stmt:
+            create_new = stmt.replace(
+                "CREATE TABLE IF NOT EXISTS projects", "CREATE TABLE projects_new", 1
+            ) + ";"
+            break
+    if not create_new:
+        return
+    # projects is referenced by FKs (uptime_checks, project_status). Build the
+    # replacement under a temp name, copy, drop the old table, then rename the temp
+    # INTO place — so we never rename the referenced name out from under its
+    # children (which modern SQLite would otherwise rewrite to a dropped table).
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(create_new)
+    cols = ", ".join(c[1] for c in conn.execute("PRAGMA table_info(projects_new)").fetchall())
+    conn.execute(f"INSERT INTO projects_new ({cols}) SELECT {cols} FROM projects")
+    conn.execute("DROP TABLE projects")
+    conn.execute("ALTER TABLE projects_new RENAME TO projects")
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 def _migrate_themes_project(conn: sqlite3.Connection):
     """Per-project themes: add project_id to an existing themes table (fresh installs
     get it from schema.sql), backfilling existing rows to project 1."""
@@ -386,6 +422,7 @@ def init_db() -> sqlite3.Connection:
     _seed_model_pricing(conn)
     _migrate_themes_link(conn)
     _migrate_themes_project(conn)
+    _migrate_projects_type_open(conn)
     conn.commit()
     return conn
 
