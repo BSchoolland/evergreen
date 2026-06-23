@@ -488,7 +488,13 @@ def record_run_cost_claude(run_id: int, json_output: str, model: str = None, eff
     usage = data.get("usage") or {}
     input_tokens = output_tokens = tokens = None
     if isinstance(usage, dict):
-        input_tokens = usage.get("input_tokens")
+        # Fold cache tokens into the priced input: cache creation ~= input rate,
+        # cache reads ~10x cheaper, so weight reads at 0.1. Without this, a
+        # cache-heavy agent's notional cost reads far below reality.
+        base_in = usage.get("input_tokens") or 0
+        cache_create = usage.get("cache_creation_input_tokens") or 0
+        cache_read = usage.get("cache_read_input_tokens") or 0
+        input_tokens = base_in + cache_create + int(cache_read * 0.1)
         output_tokens = usage.get("output_tokens")
         tokens = sum(v for v in usage.values() if isinstance(v, int)) or None
     model = model or data.get("model")

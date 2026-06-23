@@ -260,8 +260,11 @@ def _migrate_project_spine(conn: sqlite3.Connection):
         return
     if not bug_cols:
         return  # fresh DB — schema.sql creates everything already shaped
-    if "project_id" in bug_cols:
-        return  # already migrated
+
+    # NOTE: we can't gate the whole migration on "project_id in bugs" — an earlier
+    # table-rebuild migration (_migrate_disposition/_migrate_action_needed) recreates
+    # bugs from schema.sql, which already declares project_id, so the column can be
+    # present before this runs. Each step below self-gates instead.
 
     # 1. projects table (schema.sql also defines it; create here so the backfill
     #    below can reference it on an existing DB before executescript runs).
@@ -279,22 +282,24 @@ def _migrate_project_spine(conn: sqlite3.Connection):
         )"""
     )
 
-    # 2. Seed project 1 from the legacy global configs (the pre-multi-project setup).
-    cfg = dict(conn.execute("SELECT key, value FROM configs").fetchall())
-    name = cfg.get("project_name", "Project 1")
-    slug = _slugify(name)
-    project_config = {
-        k: cfg[k]
-        for k in ("project_path", "project_path_interactive", "ssh_staging",
-                  "ssh_prod", "discord_channel_id")
-        if k in cfg
-    }
-    base_url = cfg.get("base_url")
-    conn.execute(
-        "INSERT OR IGNORE INTO projects (id, slug, name, type, status, base_url, depth_tier, config) "
-        "VALUES (1, ?, ?, 'code_db', 'active', ?, 'deep', ?)",
-        (slug, name, base_url, json.dumps(project_config)),
-    )
+    # 2. Seed project 1 from the legacy global configs (the pre-multi-project
+    #    setup), only if it isn't there yet.
+    if not conn.execute("SELECT 1 FROM projects WHERE id = 1").fetchone():
+        cfg = dict(conn.execute("SELECT key, value FROM configs").fetchall())
+        name = cfg.get("project_name", "Project 1")
+        slug = _slugify(name)
+        project_config = {
+            k: cfg[k]
+            for k in ("project_path", "project_path_interactive", "ssh_staging",
+                      "ssh_prod", "discord_channel_id")
+            if k in cfg
+        }
+        base_url = cfg.get("base_url")
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, slug, name, type, status, base_url, depth_tier, config) "
+            "VALUES (1, ?, ?, 'code_db', 'active', ?, 'deep', ?)",
+            (slug, name, base_url, json.dumps(project_config)),
+        )
 
     # 3. Backfill project_id = 1 onto every per-project table (constant default is
     #    allowed by ALTER ADD COLUMN and backfills existing rows in one shot).
@@ -554,6 +559,13 @@ def get_model_price(model: str | None) -> tuple[float, float] | None:
         "SELECT input_per_mtok, output_per_mtok FROM model_pricing WHERE model = ?",
         (model,),
     ).fetchone()
+    # pi records provider-prefixed ids (e.g. "openai-codex/gpt-5.4-mini"); the
+    # pricing keys are bare. Fall back to the suffix so both engines resolve.
+    if not row and "/" in model:
+        row = conn.execute(
+            "SELECT input_per_mtok, output_per_mtok FROM model_pricing WHERE model = ?",
+            (model.rsplit("/", 1)[-1],),
+        ).fetchone()
     conn.close()
     return (row[0], row[1]) if row else None
 
