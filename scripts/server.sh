@@ -21,6 +21,20 @@ BOT_LOG_FILE="$EVERGREEN_DIR/discord-bot.log"
 
 mkdir -p "$EVERGREEN_DIR"
 
+# Make `start` self-sufficient from cron / ssh / reboot, not just an interactive
+# shell. The watchdog needs `claude` (installed in ~/.local/bin) and the Discord
+# bot's native better-sqlite3 is built against the nvm-managed node — a bare
+# non-interactive PATH has neither. Load both if present; degrade gracefully on
+# instances/machines that use a system node and a differently-located claude.
+export PATH="$HOME/.local/bin:$PATH"
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+  export NVM_DIR="$HOME/.nvm"
+  set +u
+  . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+  nvm use 22 >/dev/null 2>&1 || nvm use default >/dev/null 2>&1 || true
+  set -u
+fi
+
 is_running() { # $1 = pid file
   local f="$1"
   [ -f "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null
