@@ -46,35 +46,82 @@ def scalar(sql):
     return val
 
 
+def _pf(project_id):
+    """(sql_fragment, params) to AND-filter a query by project, or ('', ())."""
+    return ("", ()) if project_id is None else (" AND project_id = ?", (project_id,))
+
+
+def compute_stats(project_id=None):
+    w, p = _pf(project_id)
+    conn = get_connection()
+    def c(sql):
+        return conn.execute(sql, p).fetchone()[0]
+    stats = {
+        "bugs_open": c(f"SELECT COUNT(*) FROM bugs WHERE status NOT IN ('resolved','not_actionable'){w}"),
+        "bugs_resolved": c(f"SELECT COUNT(*) FROM bugs WHERE status='resolved'{w}"),
+        "alerts_actionable": c(f"SELECT COUNT(*) FROM security_alerts WHERE status IN ('new','in_progress'){w}"),
+        "alerts_cleared": c(f"SELECT COUNT(*) FROM security_alerts WHERE status IN ('not_affected','not_actionable','resolved'){w}"),
+        "total_runs": c(f"SELECT COUNT(*) FROM runs WHERE 1=1{w}"),
+        "timeouts": c(f"SELECT COUNT(*) FROM runs WHERE summary LIKE 'TIMEOUT%'{w}"),
+        "cost_total": round(c(f"SELECT COALESCE(SUM(cost),0) FROM runs WHERE 1=1{w}"), 2),
+        "cost_7d": round(c(
+            "SELECT COALESCE(SUM(cost),0) FROM runs "
+            f"WHERE started_at > cast(strftime('%s','now') as integer) - 604800{w}"), 2),
+        "prs_open": (c(f"SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='open'{w}")
+                     + c(f"SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='open'{w}")),
+        "prs_merged": (c(f"SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='merged'{w}")
+                       + c(f"SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='merged'{w}")),
+        "prs_closed": (c(f"SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='closed'{w}")
+                       + c(f"SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='closed'{w}")),
+        "themes_open": c(f"SELECT COUNT(*) FROM themes WHERE status NOT IN ('resolved','wont_fix'){w}"),
+    }
+    conn.close()
+    return stats
+
+
+def compute_daily(project_id=None):
+    w, p = _pf(project_id)
+    return {
+        "runs": query(f"SELECT date(started_at,'unixepoch','localtime') as day, COUNT(*) as n FROM runs WHERE started_at IS NOT NULL{w} GROUP BY day ORDER BY day", p),
+        "bugs": query(f"SELECT date(created_at,'unixepoch','localtime') as day, COUNT(*) as n FROM bugs WHERE 1=1{w} GROUP BY day ORDER BY day", p),
+        "prs": query(f"SELECT date(created_at,'unixepoch','localtime') as day, COUNT(*) as n FROM bugs WHERE pr_url IS NOT NULL{w} GROUP BY day ORDER BY day", p),
+        "threats": query(f"SELECT date(created_at,'unixepoch','localtime') as day, COUNT(*) as n FROM security_alerts WHERE 1=1{w} GROUP BY day ORDER BY day", p),
+    }
+
+
+def compute_cost_by_skill(project_id=None):
+    w, p = _pf(project_id)
+    return query(
+        "SELECT replace(type, 'cron:', '') as skill, "
+        "ROUND(SUM(cost), 2) as cost, COUNT(*) as runs, ROUND(AVG(cost), 3) as avg_cost "
+        f"FROM runs WHERE cost IS NOT NULL{w} GROUP BY skill ORDER BY cost DESC", p)
+
+
 def export_data():
+    projects = query("SELECT id, name, type FROM projects ORDER BY id")
+
     bugs = query(
-        "SELECT id, created_at, environment, severity, summary, error_pattern, source_query, "
+        "SELECT id, project_id, created_at, environment, severity, summary, error_pattern, source_query, "
         "probable_root_cause, verified_root_cause, verification_notes, disposition_reason, "
         "pr_url, pr_status, status, occurrence_count, first_seen_at, last_seen_at "
         "FROM bugs ORDER BY created_at DESC"
     )
     # alerts/runs are capped to the most recent ROW_LIMIT rows (see note above).
     alerts = query(
-        "SELECT id, created_at, source, source_url, cve, name, severity, "
+        "SELECT id, project_id, created_at, source, source_url, cve, name, severity, "
         "affected_component, summary, impact_assessment, pr_url, pr_status, status "
         "FROM security_alerts ORDER BY created_at DESC LIMIT ?",
         (ROW_LIMIT,),
     )
     runs = query(
-        "SELECT id, started_at, finished_at, type, summary, cost, tokens, model, effort "
+        "SELECT id, project_id, started_at, finished_at, type, summary, cost, tokens, model, effort "
         "FROM runs ORDER BY started_at DESC LIMIT ?",
         (ROW_LIMIT,),
     )
-    cost_by_skill = query(
-        "SELECT replace(type, 'cron:', '') as skill, "
-        "ROUND(SUM(cost), 2) as cost, COUNT(*) as runs, ROUND(AVG(cost), 3) as avg_cost "
-        "FROM runs WHERE cost IS NOT NULL GROUP BY skill ORDER BY cost DESC"
-    )
     # Themes: recurring problem areas, each with a count of the bugs that are
-    # symptoms of it. Active themes (open/acknowledged/planned/in_progress) sort
-    # first, then by how many bugs they explain.
+    # symptoms of it. Active themes sort first, then by how many bugs they explain.
     themes = query(
-        "SELECT t.id, t.created_at, t.updated_at, t.title, t.kind, t.subsystem, "
+        "SELECT t.id, t.project_id, t.created_at, t.updated_at, t.title, t.kind, t.subsystem, "
         "t.summary, t.evidence_paths, t.proposed_change, t.effort, t.impact, "
         "t.worth_it_verdict, t.worth_it_reason, t.status, t.disposition_reason, t.pr_url, "
         "(SELECT COUNT(*) FROM bugs b WHERE b.theme_id = t.id) AS bug_count, "
@@ -84,53 +131,33 @@ def export_data():
         "bug_count DESC, t.updated_at DESC"
     )
 
-    conn = get_connection()
-    stats = {
-        "bugs_open": conn.execute("SELECT COUNT(*) FROM bugs WHERE status NOT IN ('resolved','not_actionable')").fetchone()[0],
-        "bugs_resolved": conn.execute("SELECT COUNT(*) FROM bugs WHERE status='resolved'").fetchone()[0],
-        "alerts_actionable": conn.execute("SELECT COUNT(*) FROM security_alerts WHERE status IN ('new','in_progress')").fetchone()[0],
-        "alerts_cleared": conn.execute("SELECT COUNT(*) FROM security_alerts WHERE status IN ('not_affected','not_actionable','resolved')").fetchone()[0],
-        "total_runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-        "timeouts": conn.execute("SELECT COUNT(*) FROM runs WHERE summary LIKE 'TIMEOUT%'").fetchone()[0],
-        "cost_total": round(conn.execute("SELECT COALESCE(SUM(cost), 0) FROM runs").fetchone()[0], 2),
-        "cost_7d": round(conn.execute(
-            "SELECT COALESCE(SUM(cost), 0) FROM runs "
-            "WHERE started_at > cast(strftime('%s','now') as integer) - 604800"
-        ).fetchone()[0], 2),
-        "prs_open": (
-            conn.execute("SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='open'").fetchone()[0]
-            + conn.execute("SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='open'").fetchone()[0]
-        ),
-        "prs_merged": (
-            conn.execute("SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='merged'").fetchone()[0]
-            + conn.execute("SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='merged'").fetchone()[0]
-        ),
-        "prs_closed": (
-            conn.execute("SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='closed'").fetchone()[0]
-            + conn.execute("SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='closed'").fetchone()[0]
-        ),
-        "themes_open": conn.execute("SELECT COUNT(*) FROM themes WHERE status NOT IN ('resolved','wont_fix')").fetchone()[0],
-    }
-    conn.close()
-
-    daily = {
-        "runs": query("SELECT date(started_at,'unixepoch','localtime') as day, COUNT(*) as n FROM runs WHERE started_at IS NOT NULL GROUP BY day ORDER BY day"),
-        "bugs": query("SELECT date(created_at,'unixepoch','localtime') as day, COUNT(*) as n FROM bugs GROUP BY day ORDER BY day"),
-        "prs": query("SELECT date(created_at,'unixepoch','localtime') as day, COUNT(*) as n FROM bugs WHERE pr_url IS NOT NULL GROUP BY day ORDER BY day"),
-        "threats": query("SELECT date(created_at,'unixepoch','localtime') as day, COUNT(*) as n FROM security_alerts GROUP BY day ORDER BY day"),
-    }
+    # Combined (all-projects) aggregates, plus one set per project keyed by id.
+    stats = compute_stats()
+    daily = compute_daily()
+    cost_by_skill = compute_cost_by_skill()
+    stats_by_project = {str(p["id"]): compute_stats(p["id"]) for p in projects}
+    daily_by_project = {str(p["id"]): compute_daily(p["id"]) for p in projects}
+    cost_by_project = {str(p["id"]): compute_cost_by_skill(p["id"]) for p in projects}
 
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    return bugs, alerts, runs, stats, daily, cost_by_skill, themes, now
+    return {
+        "projects": projects, "bugs": bugs, "alerts": alerts, "runs": runs, "themes": themes,
+        "stats": stats, "daily": daily, "costBySkill": cost_by_skill,
+        "statsByProject": stats_by_project, "dailyByProject": daily_by_project,
+        "costBySkillByProject": cost_by_project, "now": now,
+    }
 
 
 TYPES = """\
 // Generated by deploy-lakebed.py — do not edit manually
 
+export type Project = { id: number; name: string; type: string };
+
 export type Bug = {
   id: number;
+  project_id: number;
   created_at: number;
   environment: string;
   severity: string;
@@ -151,6 +178,7 @@ export type Bug = {
 
 export type Alert = {
   id: number;
+  project_id: number;
   created_at: number;
   source: string;
   source_url: string | null;
@@ -167,6 +195,7 @@ export type Alert = {
 
 export type Run = {
   id: number;
+  project_id: number;
   started_at: number;
   finished_at: number | null;
   type: string;
@@ -194,6 +223,7 @@ export type Stats = {
 
 export type Theme = {
   id: number;
+  project_id: number;
   created_at: number;
   updated_at: number;
   title: string;
@@ -228,20 +258,34 @@ export type DailyActivity = {
   prs: DailyEntry[];
   threats: DailyEntry[];
 };
+
+// Per-project aggregates, keyed by project id as a string. The module-level
+// `stats`/`daily`/`costBySkill` exports are the combined (all-projects) values.
+export type StatsByProject = Record<string, Stats>;
+export type DailyByProject = Record<string, DailyActivity>;
+export type CostBySkillByProject = Record<string, CostBySkill[]>;
 """
 
 
-def write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, themes, now):
-    lines = [TYPES]
-    lines.append(f"export const bugs: Bug[] = {json.dumps(bugs, separators=(',', ':'))};")
-    lines.append(f"export const alerts: Alert[] = {json.dumps(alerts, separators=(',', ':'))};")
-    lines.append(f"export const runs: Run[] = {json.dumps(runs, separators=(',', ':'))};")
-    lines.append(f"export const stats: Stats = {json.dumps(stats, separators=(',', ':'))};")
-    lines.append(f"export const daily: DailyActivity = {json.dumps(daily, separators=(',', ':'))};")
-    lines.append(f"export const costBySkill: CostBySkill[] = {json.dumps(cost_by_skill, separators=(',', ':'))};")
-    lines.append(f"export const themes: Theme[] = {json.dumps(themes, separators=(',', ':'))};")
-    lines.append(f'export const lastUpdated = "{now}";')
-    lines.append("")
+def write_data_ts(d):
+    def j(v):
+        return json.dumps(v, separators=(",", ":"))
+    lines = [
+        TYPES,
+        f"export const projects: Project[] = {j(d['projects'])};",
+        f"export const bugs: Bug[] = {j(d['bugs'])};",
+        f"export const alerts: Alert[] = {j(d['alerts'])};",
+        f"export const runs: Run[] = {j(d['runs'])};",
+        f"export const themes: Theme[] = {j(d['themes'])};",
+        f"export const stats: Stats = {j(d['stats'])};",
+        f"export const daily: DailyActivity = {j(d['daily'])};",
+        f"export const costBySkill: CostBySkill[] = {j(d['costBySkill'])};",
+        f"export const statsByProject: StatsByProject = {j(d['statsByProject'])};",
+        f"export const dailyByProject: DailyByProject = {j(d['dailyByProject'])};",
+        f"export const costBySkillByProject: CostBySkillByProject = {j(d['costBySkillByProject'])};",
+        f'export const lastUpdated = "{d["now"]}";',
+        "",
+    ]
     DATA_FILE.write_text("\n".join(lines))
     print(f"Wrote {DATA_FILE} ({DATA_FILE.stat().st_size} bytes)")
 
@@ -351,9 +395,10 @@ def deploy():
 
 def main():
     print("Exporting Evergreen DB...")
-    bugs, alerts, runs, stats, daily, cost_by_skill, themes, now = export_data()
-    print(f"  {len(bugs)} bugs, {len(alerts)} alerts, {len(runs)} runs, {len(themes)} themes")
-    write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, themes, now)
+    d = export_data()
+    print(f"  {len(d['projects'])} projects, {len(d['bugs'])} bugs, {len(d['alerts'])} alerts, "
+          f"{len(d['runs'])} runs, {len(d['themes'])} themes")
+    write_data_ts(d)
     changed = git_commit()
     if changed:
         deploy()
