@@ -28,13 +28,14 @@ SYNC_SKILLS_SCRIPT = REPO / "scripts" / "sync-pi-skills.py"
 
 # Detection skills run on a schedule. verify-bug and triage are triggered
 # after detection, not independently scheduled.
-SCHEDULED_SKILLS = ["check-bugs", "hackernews-monitor", "tacos-audit", "update-status"]
+SCHEDULED_SKILLS = ["check-bugs", "hackernews-monitor", "tacos-audit", "update-status", "reconcile"]
 
 SCHEDULE_DEFAULTS = {
     "check-bugs": 60,
     "hackernews-monitor": 360,
     "tacos-audit": 1440,
     "update-status": 240,
+    "reconcile": 4320,  # every 3 days
 }
 
 MAX_VERIFY_RUNS = 5

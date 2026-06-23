@@ -17,6 +17,7 @@ If the table is empty or doesn't exist, run `python3 scripts/evergreen-server.py
    - **hackernews-monitor**: Watches HN for security vulnerabilities relevant to the project's stack
    - **tacos-audit**: Runs dependency audit on the project and assesses real risk
    - **update-status**: Syncs PR statuses, processes Discord replies, resolves completed issues (every 4h, skips if nothing is in progress)
+   - **reconcile**: Unsticks issues stranded in a status no skill will advance — returns them to the conveyor, or consolidates a class of unfixable bugs into a `themes` row (every 3 days)
    - **verify-bug**: Runs automatically after detection skills if new bugs were found. Attempts to reproduce and confirm the root cause before triage acts on it. (not independently scheduled)
    - **triage**: Runs automatically after verify-bug. Only opens PRs for verified bugs; unverified bugs get notify-only. Security alerts are triaged directly. (not independently scheduled)
 

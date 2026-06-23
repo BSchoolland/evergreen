@@ -241,6 +241,23 @@ def _migrate_skill_queue(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_themes_link(conn: sqlite3.Connection):
+    """Add the theme_id column linking a bug to its parent theme.
+
+    CREATE TABLE IF NOT EXISTS won't add a column to an existing bugs table, so we
+    add it here. ALTER TABLE ADD COLUMN can't carry a REFERENCES clause portably, so
+    the column is a plain INTEGER here (the canonical schema.sql keeps the FK for
+    fresh installs); writes are controlled, so FK enforcement isn't load-bearing."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bugs)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols or "theme_id" in cols:
+        return
+    conn.execute("ALTER TABLE bugs ADD COLUMN theme_id INTEGER")
+    conn.commit()
+
+
 def init_db() -> sqlite3.Connection:
     EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -254,6 +271,7 @@ def init_db() -> sqlite3.Connection:
     _migrate_run_review_links(conn)
     _migrate_skill_queue(conn)
     conn.executescript(_read_schema())
+    _migrate_themes_link(conn)
     conn.commit()
     return conn
 

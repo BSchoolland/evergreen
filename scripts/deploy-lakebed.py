@@ -70,6 +70,19 @@ def export_data():
         "ROUND(SUM(cost), 2) as cost, COUNT(*) as runs, ROUND(AVG(cost), 3) as avg_cost "
         "FROM runs WHERE cost IS NOT NULL GROUP BY skill ORDER BY cost DESC"
     )
+    # Themes: recurring problem areas, each with a count of the bugs that are
+    # symptoms of it. Active themes (open/acknowledged/planned/in_progress) sort
+    # first, then by how many bugs they explain.
+    themes = query(
+        "SELECT t.id, t.created_at, t.updated_at, t.title, t.kind, t.subsystem, "
+        "t.summary, t.evidence_paths, t.proposed_change, t.effort, t.impact, "
+        "t.worth_it_verdict, t.worth_it_reason, t.status, t.disposition_reason, t.pr_url, "
+        "(SELECT COUNT(*) FROM bugs b WHERE b.theme_id = t.id) AS bug_count, "
+        "(SELECT group_concat(b.id) FROM bugs b WHERE b.theme_id = t.id) AS bug_ids "
+        "FROM themes t "
+        "ORDER BY CASE t.status WHEN 'resolved' THEN 1 WHEN 'wont_fix' THEN 2 ELSE 0 END, "
+        "bug_count DESC, t.updated_at DESC"
+    )
 
     conn = get_connection()
     stats = {
@@ -96,6 +109,7 @@ def export_data():
             conn.execute("SELECT COUNT(*) FROM bugs WHERE pr_url IS NOT NULL AND pr_status='closed'").fetchone()[0]
             + conn.execute("SELECT COUNT(*) FROM security_alerts WHERE pr_url IS NOT NULL AND pr_status='closed'").fetchone()[0]
         ),
+        "themes_open": conn.execute("SELECT COUNT(*) FROM themes WHERE status NOT IN ('resolved','wont_fix')").fetchone()[0],
     }
     conn.close()
 
@@ -109,7 +123,7 @@ def export_data():
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    return bugs, alerts, runs, stats, daily, cost_by_skill, now
+    return bugs, alerts, runs, stats, daily, cost_by_skill, themes, now
 
 
 TYPES = """\
@@ -175,6 +189,28 @@ export type Stats = {
   prs_open: number;
   prs_merged: number;
   prs_closed: number;
+  themes_open: number;
+};
+
+export type Theme = {
+  id: number;
+  created_at: number;
+  updated_at: number;
+  title: string;
+  kind: string;
+  subsystem: string;
+  summary: string;
+  evidence_paths: string | null;
+  proposed_change: string | null;
+  effort: string | null;
+  impact: string | null;
+  worth_it_verdict: string | null;
+  worth_it_reason: string | null;
+  status: string;
+  disposition_reason: string | null;
+  pr_url: string | null;
+  bug_count: number;
+  bug_ids: string | null;
 };
 
 export type CostBySkill = {
@@ -195,7 +231,7 @@ export type DailyActivity = {
 """
 
 
-def write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, now):
+def write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, themes, now):
     lines = [TYPES]
     lines.append(f"export const bugs: Bug[] = {json.dumps(bugs, separators=(',', ':'))};")
     lines.append(f"export const alerts: Alert[] = {json.dumps(alerts, separators=(',', ':'))};")
@@ -203,6 +239,7 @@ def write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, now):
     lines.append(f"export const stats: Stats = {json.dumps(stats, separators=(',', ':'))};")
     lines.append(f"export const daily: DailyActivity = {json.dumps(daily, separators=(',', ':'))};")
     lines.append(f"export const costBySkill: CostBySkill[] = {json.dumps(cost_by_skill, separators=(',', ':'))};")
+    lines.append(f"export const themes: Theme[] = {json.dumps(themes, separators=(',', ':'))};")
     lines.append(f'export const lastUpdated = "{now}";')
     lines.append("")
     DATA_FILE.write_text("\n".join(lines))
@@ -314,9 +351,9 @@ def deploy():
 
 def main():
     print("Exporting Evergreen DB...")
-    bugs, alerts, runs, stats, daily, cost_by_skill, now = export_data()
-    print(f"  {len(bugs)} bugs, {len(alerts)} alerts, {len(runs)} runs")
-    write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, now)
+    bugs, alerts, runs, stats, daily, cost_by_skill, themes, now = export_data()
+    print(f"  {len(bugs)} bugs, {len(alerts)} alerts, {len(runs)} runs, {len(themes)} themes")
+    write_data_ts(bugs, alerts, runs, stats, daily, cost_by_skill, themes, now)
     changed = git_commit()
     if changed:
         deploy()
