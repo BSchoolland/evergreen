@@ -140,11 +140,20 @@ function startOutboundPoller() {
         if (OWNER_ID) {
           content = content.replace(/@Ben/gi, `<@${OWNER_ID}>`);
         }
-        const chunks = splitMessage(content);
         let firstMessageId = null;
-        for (const chunk of chunks) {
-          const sent = await targetChannel.send(chunk);
-          if (!firstMessageId) firstMessageId = sent.id;
+        if (msg.image_path) {
+          // Attach the image (with caption, if any) as a single message.
+          const sent = await targetChannel.send({
+            content: content ? content.slice(0, 1900) : undefined,
+            files: [msg.image_path],
+          });
+          firstMessageId = sent.id;
+        } else {
+          const chunks = splitMessage(content);
+          for (const chunk of chunks) {
+            const sent = await targetChannel.send(chunk);
+            if (!firstMessageId) firstMessageId = sent.id;
+          }
         }
         markSent(msg.id, firstMessageId);
       } catch (err) {

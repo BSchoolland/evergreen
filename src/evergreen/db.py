@@ -356,6 +356,17 @@ def _migrate_themes_link(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_discord_image(conn: sqlite3.Connection):
+    """Add image_path to discord_messages so outbound messages can carry a PNG."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(discord_messages)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if cols and "image_path" not in cols:
+        conn.execute("ALTER TABLE discord_messages ADD COLUMN image_path TEXT")
+        conn.commit()
+
+
 def _migrate_projects_type_open(conn: sqlite3.Connection):
     """Drop the legacy CHECK(type IN (...)) on projects.type so new project types
     (server_code, etc.) need no schema migration — types are validated in code now.
@@ -423,6 +434,7 @@ def init_db() -> sqlite3.Connection:
     _migrate_themes_link(conn)
     _migrate_themes_project(conn)
     _migrate_projects_type_open(conn)
+    _migrate_discord_image(conn)
     conn.commit()
     return conn
 

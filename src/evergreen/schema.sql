@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS discord_messages (
   author_id TEXT,
   content TEXT NOT NULL,
   reply_to_message_id TEXT,
+  image_path TEXT,
   created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
   read_at INTEGER
 );

@@ -29,6 +29,7 @@ def get_conn():
             author_id TEXT,
             content TEXT NOT NULL,
             reply_to_message_id TEXT,
+            image_path TEXT,
             created_at INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as integer)),
             read_at INTEGER
         )
@@ -74,11 +75,11 @@ def ensure_bot_running():
     time.sleep(5)
 
 
-def send(channel_id, content):
+def send(channel_id, content, image_path=None):
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO discord_messages (channel_id, direction, content) VALUES (?, 'outbound', ?)",
-        (channel_id, content),
+        "INSERT INTO discord_messages (channel_id, direction, content, image_path) VALUES (?, 'outbound', ?, ?)",
+        (channel_id, content, image_path),
     )
     conn.commit()
     row_id = cur.lastrowid
@@ -127,15 +128,18 @@ def wait_for_reply(discord_message_id, timeout=1800):
 
 def main():
     parser = argparse.ArgumentParser(description="Send a message via the evergreen Discord bot")
-    parser.add_argument("message", help="Message content to send")
+    parser.add_argument("message", nargs="?", default="", help="Message content (optional when sending an image)")
     parser.add_argument("--channel", required=True, help="Discord channel ID")
+    parser.add_argument("--image", help="Path to a local PNG/image to attach")
     parser.add_argument("--no-wait", action="store_true", help="Don't wait for a reply (fire and forget)")
     parser.add_argument("--timeout", type=int, default=10800, help="Reply timeout in seconds (default: 3 hours)")
 
     args = parser.parse_args()
+    if not args.message and not args.image:
+        parser.error("provide a message, an --image, or both")
 
     ensure_bot_running()
-    row_id = send(args.channel, args.message)
+    row_id = send(args.channel, args.message, args.image)
 
     if not args.no_wait:
         discord_msg_id = wait_for_sent(row_id)

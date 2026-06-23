@@ -23,6 +23,7 @@ db.exec(`
 `);
 
 try { db.exec('ALTER TABLE discord_messages ADD COLUMN author_id TEXT'); } catch (e) {}
+try { db.exec('ALTER TABLE discord_messages ADD COLUMN image_path TEXT'); } catch (e) {}
 
 export function queueOutbound(content, channelId) {
   const stmt = db.prepare(`
