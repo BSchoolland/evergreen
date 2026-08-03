@@ -28,6 +28,16 @@ DEFAULT_FAILURE_THRESHOLD = 3
 REQUEST_TIMEOUT = 15
 USER_AGENT = "evergreen-uptime/1.0 (+https://github.com/BSchoolland/evergreen)"
 
+# Probed only when a project check fails, to distinguish "the site is down" from
+# "this machine's network/DNS is down" (the desktop's WiFi uplink drops for
+# minutes at a time). If the sentinel is unreachable too, the failure is ours,
+# not the site's, and the check is discarded.
+SENTINEL_URL = "https://www.google.com/generate_204"
+
+# Tracks whether the previous sweep hit a monitor-side outage, so entering and
+# leaving the blind window each log exactly once.
+_sentinel_was_down = False
+
 
 def _ssl_expiry_days(host: str, port: int = 443) -> int | None:
     """Days until the TLS cert for host expires, or None if it can't be read."""
@@ -72,6 +82,19 @@ def check_url(url: str) -> dict:
     if parsed.scheme == "https" and parsed.hostname:
         result["ssl_expiry_days"] = _ssl_expiry_days(parsed.hostname, parsed.port or 443)
     return result
+
+
+def _sentinel_up() -> bool:
+    """True if this machine can reach the sentinel at all. Any HTTP response —
+    even an error status — proves DNS and the network path work."""
+    req = urllib.request.Request(SENTINEL_URL, method="GET", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
 
 
 def _queue_discord(conn, channel_id: str | None, content: str):
@@ -160,10 +183,16 @@ def _due(conn, pid: int, interval_sec: int) -> bool:
 
 def run_sweep(log=None):
     """Probe every active project whose uptime check is due. Called each watchdog
-    tick; cheap enough to run every minute (it self-throttles per project)."""
+    tick; cheap enough to run every minute (it self-throttles per project).
+
+    A failed probe only counts if the sentinel is reachable at that moment.
+    Otherwise this machine is offline, the check is discarded (nothing recorded,
+    consecutive_failures untouched), and the project is re-probed next tick."""
+    global _sentinel_was_down
     from evergreen.db import list_projects
     conn = get_connection()
     checked = 0
+    sentinel_ok = None  # probed at most once per sweep, on first failure
     for project in list_projects(include_inactive=False):
         url = project.get("base_url")
         if not url:
@@ -174,10 +203,26 @@ def run_sweep(log=None):
         if not _due(conn, project["id"], interval):
             continue
         result = check_url(url)
+        if not result["is_up"]:
+            if sentinel_ok is None:
+                sentinel_ok = _sentinel_up()
+            if not sentinel_ok:
+                if log and not _sentinel_was_down:
+                    log.warning(
+                        "uptime: %s failed (%s) but sentinel %s is unreachable — "
+                        "local network outage, discarding checks until it clears",
+                        project["slug"], result["error"] or result["status_code"], SENTINEL_URL,
+                    )
+                _sentinel_was_down = True
+                continue
         transition = record_check(conn, project, result)
         conn.commit()
         checked += 1
         if log and transition:
             log.info("uptime: %s -> %s", project["slug"], transition)
+    if _sentinel_was_down and (sentinel_ok is True or checked):
+        if log:
+            log.warning("uptime: local network restored — uptime checks resumed")
+        _sentinel_was_down = False
     conn.close()
     return checked
