@@ -2,11 +2,13 @@
 
 Send an uptime status graph to Discord when someone asks for one.
 
-Generate it — `python3 scripts/uptime_graph.py [days]` prints the path to a PNG: a
-GitHub-status-style chart of every monitored project's uptime. Then post it:
+Generate it — `cd /home/ben/Projects/evergreen && python3 scripts/uptime_graph.py [days]`
+prints the path to a PNG: a GitHub-status-style chart of every monitored project's uptime.
+The scripts live in the evergreen repo root (`scripts/`), not in this skill directory, so run
+them from there. Then post it:
 
 ```
-python3 scripts/discord_send.py --image <path> --channel <id> --no-wait "<short caption>"
+cd /home/ben/Projects/evergreen && python3 scripts/discord_send.py --image <path> --channel <id> --no-wait "<short caption>"
 ```
 
 Use the channel from `/read-config-evergreen` (a project's alert channel, or the instance
