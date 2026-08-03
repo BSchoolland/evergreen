@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""React to a Discord message with an emoji.
+
+Usage: discord-react <channel_or_thread_id> <message_id> <emoji>
+Example: discord-react 123 456 👍
+"""
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+
+def token():
+    for line in ENV_PATH.read_text().splitlines():
+        if line.startswith("DISCORD_TOKEN="):
+            return line.split("=", 1)[1].strip()
+    sys.exit("DISCORD_TOKEN not found in " + str(ENV_PATH))
+
+
+def main():
+    if len(sys.argv) != 4:
+        sys.exit(__doc__.strip())
+    channel_id, message_id, emoji = sys.argv[1], sys.argv[2], sys.argv[3]
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}"
+        f"/reactions/{urllib.parse.quote(emoji)}/@me",
+        headers={
+            "Authorization": "Bot " + token(),
+            "User-Agent": "DiscordBot (evergreen-team, 2.0)",
+        },
+        method="PUT",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=15)
+        print("reacted", emoji)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"react failed: HTTP {e.code}: {e.read().decode()[:200]}")
+
+
+if __name__ == "__main__":
+    main()

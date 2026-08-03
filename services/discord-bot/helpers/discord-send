@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Send a message to a Discord channel or thread as the Evergreen team bot.
+
+Usage: discord-send <channel_or_thread_id> <message...>
+       echo "long message" | discord-send <channel_or_thread_id> -
+
+Long messages are split into <=1900-char chunks on line boundaries.
+Prints the sent message id(s), one per line.
+"""
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+API = "https://discord.com/api/v10"
+MAX = 1900
+
+
+def token():
+    for line in ENV_PATH.read_text().splitlines():
+        if line.startswith("DISCORD_TOKEN="):
+            return line.split("=", 1)[1].strip()
+    sys.exit("DISCORD_TOKEN not found in " + str(ENV_PATH))
+
+
+def chunks(text):
+    out, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > MAX:
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(line[:MAX])
+            line = line[MAX:]
+        joined = cur + "\n" + line if cur else line
+        if len(joined) > MAX:
+            out.append(cur)
+            cur = line
+        else:
+            cur = joined
+    if cur.strip():
+        out.append(cur)
+    return out or [""]
+
+
+def post(channel_id, content):
+    req = urllib.request.Request(
+        f"{API}/channels/{channel_id}/messages",
+        data=json.dumps({"content": content}).encode(),
+        headers={
+            "Authorization": "Bot " + token(),
+            "Content-Type": "application/json",
+            "User-Agent": "DiscordBot (evergreen-team, 2.0)",
+        },
+        method="POST",
+    )
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read())["id"]
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:  # rate limited: wait and retry
+                retry = json.loads(e.read()).get("retry_after", 2)
+                time.sleep(float(retry) + 0.5)
+                continue
+            sys.exit(f"send failed: HTTP {e.code}: {e.read().decode()[:200]}")
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.exit(__doc__.strip())
+    channel_id = sys.argv[1]
+    text = sys.stdin.read() if sys.argv[2] == "-" else " ".join(sys.argv[2:])
+    if not text.strip():
+        sys.exit("refusing to send an empty message")
+    for c in chunks(text):
+        print(post(channel_id, c))
+
+
+if __name__ == "__main__":
+    main()

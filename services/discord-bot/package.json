@@ -1,11 +1,10 @@
 {
   "name": "evergreen-discord-bot",
-  "version": "1.0.0",
+  "private": true,
   "type": "module",
+  "description": "Dumb router: maps Discord threads to detached claude -p sessions. All behavior lives in .claude/skills/discord-live/.",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.185",
-    "better-sqlite3": "^9.2.2",
-    "discord.js": "^14.25.1",
-    "dotenv": "^17.2.3"
+    "better-sqlite3": "^11.3.0",
+    "discord.js": "^14.16.3"
   }
 }

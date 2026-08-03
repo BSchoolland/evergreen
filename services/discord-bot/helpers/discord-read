@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Read recent messages from a Discord channel or thread (chronological).
+
+Usage: discord-read <channel_or_thread_id> [--limit N] [--after MESSAGE_ID]
+
+Prints one message per line: [MM-DD HH:MM] author: content
+Attachments are listed as [attachment] <url>. Empty output = no messages.
+"""
+import argparse
+import json
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+API = "https://discord.com/api/v10"
+
+
+def token():
+    for line in ENV_PATH.read_text().splitlines():
+        if line.startswith("DISCORD_TOKEN="):
+            return line.split("=", 1)[1].strip()
+    sys.exit("DISCORD_TOKEN not found in " + str(ENV_PATH))
+
+
+def api_get(path):
+    req = urllib.request.Request(
+        API + path,
+        headers={
+            "Authorization": "Bot " + token(),
+            "User-Agent": "DiscordBot (evergreen-team, 2.0)",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"read failed: HTTP {e.code}: {e.read().decode()[:300]}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("channel_id")
+    ap.add_argument("--limit", type=int, default=30)
+    ap.add_argument("--after", help="only messages after this message ID")
+    args = ap.parse_args()
+
+    q = f"?limit={min(args.limit, 100)}"
+    if args.after:
+        q += f"&after={args.after}"
+    msgs = api_get(f"/channels/{args.channel_id}/messages{q}")
+    for m in reversed(msgs):  # API returns newest first; print chronological
+        if not m.get("content") and not m.get("attachments"):
+            continue  # system messages (thread starters etc.) — noise
+        author = m["author"].get("global_name") or m["author"]["username"]
+        if m["author"].get("bot"):
+            author += " [bot]"
+        ts = m["timestamp"][5:16].replace("T", " ")  # MM-DD HH:MM
+        body = m.get("content", "")
+        for a in m.get("attachments", []):
+            body += ("\n" if body else "") + "[attachment] " + a["url"]
+        body = body.replace("\n", "\n    ")  # indent continuation lines
+        print(f"[{ts}] {author}: {body}")
+
+
+if __name__ == "__main__":
+    main()

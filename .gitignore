@@ -34,3 +34,6 @@ Thumbs.db
 /tmp/
 *.log
 *.pid
+
+# Discord bot runtime state (sessions map + agent logs)
+/services/discord-bot/state/

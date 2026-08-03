@@ -1,67 +1,56 @@
-# Evergreen Discord bot — notifications + interactive dev
+# Evergreen Discord bot v2 — a dumb router
 
-This one process is evergreen's Discord front-end. It plays two roles:
+Maps Discord threads to detached `claude -p` sessions. **All conversational
+behavior lives in `.claude/skills/discord-live/SKILL.md`** — edit that, not
+this code. The bot never reads message content to make decisions; its state
+is integers and UUIDs only.
 
-1. **Notification relay (unchanged).** The watchdog queues messages in the
-   `discord_messages` table; the bot posts them to the channel and records replies.
-   See the outbound/reply pollers in `index.js`.
+## The state machine (per thread)
 
-2. **Interactive dev (new).** You talk to evergreen in a **thread** and it does work
-   live — on Pi, with evergreen's skills and DB, in its own clone of the target repo.
+| Event | Action |
+|---|---|
+| Owner message in main channel | create thread, mint session UUID, spawn agent |
+| Message in a thread | debounce 2s, SIGTERM live agent if any, `claude -p --resume <uuid>` with the message appended |
+| Agent exits | **nothing** (no crash detection — the human's next message is the retry) |
+| Bot boot | sweep known threads for messages newer than `lastDeliveredId`, deliver them |
 
-## The two-dev model
+Key facts (all verified by test):
 
-Evergreen runs as two "devs" that share this machine + the `~/.evergreen/evergreen.db`
-state, but **never share a git working tree**:
+- **SIGTERM is claude's native interrupt**: reaps its tool children, writes
+  `[Request interrupted]` to the transcript, exits in ~2-4s. Fallback for a
+  stuck agent is `pkill -9 -s <pid>` (session kill — tool children have their
+  own process groups, plain kill would orphan them).
+- **Sessions are cwd-bound.** Agents always spawn with cwd = repo root. Moving
+  the repo orphans existing conversations (new messages there will start fresh
+  context; nothing crashes).
+- A message reaches an agent in exactly one way: inside its spawn prompt.
+  There is no second delivery path, hence no delivery races.
+- Agents are **detached** (`KillMode=process` in the unit): restarting the bot
+  never kills running agents. A restarted bot re-adopts them via pid +
+  `/proc/<pid>/cmdline`-contains-session-UUID.
 
-| Dev | Engine | Clone | Driven by |
-|-----|--------|-------|-----------|
-| **Watchdog** | `pi -p` (scheduled) | `project_path` | `scripts/evergreen-server.py` |
-| **Interactive** | `pi --mode rpc` (persistent) | `project_path_interactive` | this bot |
+## Relay (watchdog notifications)
 
-Each actor sets `EVERGREEN_PROJECT_PATH` to its own clone; skills resolve the project
-path from that env var (see `db.get_project_path`). Separate clones = no collisions,
-no locks, no worktree lifecycle to manage.
+Drains `outbound` rows from `$EVERGREEN_HOME/evergreen.db` queued by
+`scripts/discord_send.py`. Claim-before-send: any failure marks the row
+`send_error` and it is never re-picked — re-send loops are structurally
+impossible. Backlog older than 10 min at boot is skipped, not dumped.
+Replies to relay messages are recorded as `inbound` rows so
+`discord_send.py --wait-reply` works. Chat threads never touch the DB.
 
-## How a conversation works
-
-- **Start one:** @mention the bot in the channel. It opens a thread and seeds the
-  conversation with your message.
-- **Continue:** every message you send in that thread is a turn. If the agent is
-  mid-task, your message is delivered as a **steer** (it adjusts course before the
-  next model call) rather than queued behind the whole run.
-- **Memory:** each thread maps to one persistent Pi session file
-  (`.pi/sessions/threads/<threadId>/`), tracked in the `conversations` table. The
-  child process is evicted after 30 min idle and **resumed from the session file**
-  on your next message — context survives.
-- **Permissionless:** the agent runs tools freely in its sandbox clone — pi ships
-  with no permission gating and we keep it that way. Only the owner
-  (`DISCORD_OWNER_ID`) can drive the agent at all. (If a skill itself calls
-  `ctx.ui.confirm`, `interactive.js` will still render it as a button — but nothing
-  proactively gates tool calls.)
-
-## Files
-
-- `index.js` — Discord client; routes thread messages → interactive, channel
-  @mentions → new conversation, everything else → the notification relay.
-- `piThread.js` — one `pi --mode rpc` child per thread (JSONL framing, prompt/steer,
-  idle eviction, resume). Emits high-level events.
-- `interactive.js` — wires threads ↔ `PiThread`: throttled streaming edits, a working
-  status line, free-text input capture (and renders any skill-initiated confirm/select).
-- `db.js` — `discord_messages` + `conversations` + config helpers.
-
-## Running
+## Ops
 
 ```sh
-# one-time: create the interactive dev's clone and record its path
-bash ../../scripts/setup-interactive-clone.sh
-cd <project_path_interactive> && npm install   # so the dev can build/test there
-
-# start the bot (auto-syncs .pi/skills on boot)
-node index.js
+systemctl --user {start,stop,restart,status} evergreen-team-discord
+journalctl --user -u evergreen-team-discord -f     # bot logs
+state/logs/<threadId>.log                          # per-agent stdout/stderr
+state/threads.json                                 # threadId -> {sessionId, pid, lastDeliveredId}
 ```
 
-Config it reads from the `configs` table: `project_path_interactive` (falls back to
-`project_path` with a collision warning), `discord_model` (optional `provider/model`,
-falling back to `pi_model`), `discord_thinking` (optional Pi thinking level), plus
-`DISCORD_TOKEN` / `DISCORD_CHANNEL_ID` / `DISCORD_OWNER_ID` from `.env`.
+Config in `.env`: `DISCORD_TOKEN`, `DISCORD_CHANNEL_ID`, `DISCORD_OWNER_ID`
+(comma-separated), optional `DISCORD_AGENT_MODEL`, `DISCORD_PERMISSION_MODE`
+(default `bypassPermissions`), `CLAUDE_BIN`.
+
+To reset a conversation: delete its entry from `state/threads.json` (next
+message starts a fresh session). To reset everything: stop bot, delete
+`state/threads.json`, start bot.
