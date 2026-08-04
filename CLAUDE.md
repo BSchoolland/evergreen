@@ -16,6 +16,15 @@ TEAM/Ben.md
 
 Read these if relevant.
 
+## Background work (Discord sessions)
+
+In Discord you run as a throwaway `claude -p` process per message: when your turn
+ends, `run_in_background` tasks die with you, and a new message from the team kills
+your whole process session. Anything that must outlive the turn (long runs, builds,
+monitors) needs `setsid nohup <job> ... & disown` — and since nothing wakes you when
+it finishes, the job must deliver its own results (e.g. via `discord-send`). Make it
+idempotent so a relaunch resumes instead of starting over.
+
 ## Researching past conversations
 
 To look up past Discord discussion, use `/discord-search-evergreen` — it searches the
