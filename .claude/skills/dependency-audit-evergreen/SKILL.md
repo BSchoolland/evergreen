@@ -24,6 +24,6 @@ Run a dependency audit on the monitored project and assess real risk.
 
 ## Notes
 
-- The script deduplicates on `(source, cve, source_url)` so re-running is safe.
+- The script deduplicates on `(project_id, source, cve, source_url)` so re-running is safe. Advisories with no CVE dedupe on `source_url`, so always pass the advisory URL (`--source-url`) — an alert with neither a CVE nor a URL has no stable identity and will re-file on every run.
 - Use real CVE IDs when they exist. Leave the CVE field null when there isn't one. Use `--name` for common names when the vulnerability has one.
 - Moderate and low vulns in devDependencies can usually be recorded as info and moved on.

@@ -14,6 +14,26 @@ def resolve_project_id(explicit=None):
     return explicit if explicit is not None else (current_project_id() or 1)
 
 
+def find_duplicate(conn, project_id, source, cve, source_url):
+    """Existing alert id matching this one's identity, or None.
+
+    The UNIQUE(project_id, source, cve, source_url) table constraint can't do this
+    on its own: SQL treats NULL as distinct, so rows with no CVE never collide.
+    Most advisories (bun audit, GHSA-only) have no CVE, so they re-file every run.
+
+    With neither a CVE nor a source_url there is no stable identity to match on --
+    dedup would collapse every alert from that source into one, so don't try.
+    """
+    if cve is None and source_url is None:
+        return None
+    row = conn.execute(
+        """SELECT id FROM security_alerts
+           WHERE project_id = ? AND source = ? AND cve IS ? AND source_url IS ?""",
+        (project_id, source, cve, source_url),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def record_alert(
     source,
     severity,
@@ -32,6 +52,10 @@ def record_alert(
     project_id = resolve_project_id(project_id)
     conn = get_connection()
     try:
+        existing = find_duplicate(conn, project_id, source, cve, source_url)
+        if existing is not None:
+            print(f"Skipped (duplicate of #{existing}): {summary}")
+            return None
         conn.execute(
             """INSERT INTO security_alerts
                (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
@@ -59,6 +83,13 @@ def record_batch(alerts, project_id=None):
     try:
         for a in alerts:
             try:
+                existing = find_duplicate(
+                    conn, project_id, a["source"], a.get("cve"), a.get("source_url")
+                )
+                if existing is not None:
+                    skipped += 1
+                    print(f"  Skipped (duplicate of #{existing}): {a['summary']}")
+                    continue
                 conn.execute(
                     """INSERT INTO security_alerts
                        (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
