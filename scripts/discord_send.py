@@ -11,11 +11,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import EVERGREEN_DIR, epoch
+from evergreen.db import EVERGREEN_DIR, epoch, undelivered_outbound
 
 DB_PATH = EVERGREEN_DIR / "evergreen.db"
 BOT_DIR = Path(__file__).resolve().parent.parent / "services" / "discord-bot"
 BOT_PID_FILE = EVERGREEN_DIR / "discord-bot.pid"
+# Same file server.sh logs the bot to, so a crash loop is visible either way.
+BOT_LOG_FILE = EVERGREEN_DIR / "discord-bot.log"
 
 def get_conn():
     conn = sqlite3.connect(str(DB_PATH))
@@ -60,19 +62,33 @@ def ensure_bot_running():
     if _bot_running():
         return
     print("Bot not running, starting it...", file=sys.stderr)
+    log = open(BOT_LOG_FILE, "a")
     proc = subprocess.Popen(
         ["node", "index.js"],
         cwd=str(BOT_DIR),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=log,
         start_new_session=True,
     )
+    log.close()
     # Record the pid so the next send sees this instance and won't spawn another.
     try:
         BOT_PID_FILE.write_text(f"{proc.pid}\n")
     except OSError:
         pass
     time.sleep(5)
+
+
+def warn_if_undelivered():
+    """Report outbound messages the bot never delivered. Covers rows queued by
+    other writers (the uptime monitor) that no send call would otherwise check."""
+    stuck = undelivered_outbound()
+    if not stuck:
+        return
+    oldest = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(stuck[0]["created_at"]))
+    print(f"WARNING: {len(stuck)} outbound Discord message(s) were never delivered "
+          f"(oldest #{stuck[0]['id']} queued {oldest}). Discord delivery is broken -- "
+          f"check {BOT_LOG_FILE}.", file=sys.stderr)
 
 
 def send(channel_id, content, image_path=None):
@@ -139,10 +155,13 @@ def main():
         parser.error("provide a message, an --image, or both")
 
     ensure_bot_running()
+    warn_if_undelivered()
     row_id = send(args.channel, args.message, args.image)
 
+    # --no-wait means "don't wait for a reply", not "don't check the send".
+    discord_msg_id = wait_for_sent(row_id)
+
     if not args.no_wait:
-        discord_msg_id = wait_for_sent(row_id)
         reply = wait_for_reply(discord_msg_id, timeout=args.timeout)
         sys.exit(0 if reply else 1)
 

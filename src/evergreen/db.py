@@ -609,6 +609,31 @@ def project_alert_channel(project_id: int) -> str | None:
     return project_config_value(project_id, "discord_channel_id") or get_config("discord_channel_id")
 
 
+# --- Discord outbound queue ---
+
+# An outbound row is stamped with a discord_message_id the moment the bot
+# delivers it. The bot polls every 3s, so anything still unstamped after this
+# long was never delivered.
+UNDELIVERED_AFTER_SEC = 300
+
+
+def undelivered_outbound(stale_after_sec: int = UNDELIVERED_AFTER_SEC) -> list[dict]:
+    """Outbound Discord messages the bot never delivered, oldest first.
+
+    Two writers queue outbound rows -- scripts/discord_send.py and the uptime
+    monitor's _queue_discord -- and neither can observe delivery on its own.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, created_at, channel_id, content FROM discord_messages "
+        "WHERE direction = 'outbound' AND (discord_message_id IS NULL OR discord_message_id = '') "
+        "AND created_at < ? ORDER BY created_at ASC",
+        (epoch() - stale_after_sec,),
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "created_at": r[1], "channel_id": r[2], "content": r[3]} for r in rows]
+
+
 # --- Notional model pricing ---
 
 # Dollars per 1M tokens (input, output). Notional — tune freely in the DB. These
