@@ -367,6 +367,16 @@ def _migrate_discord_image(conn: sqlite3.Connection):
         conn.commit()
 
 
+
+def _migrate_discord_send_error(conn: sqlite3.Connection):
+    """Add send_error and claimed_at to track terminal failures and backoff."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(discord_messages)").fetchall()]
+    if "send_error" not in cols:
+        conn.execute("ALTER TABLE discord_messages ADD COLUMN send_error TEXT")
+    if "claimed_at" not in cols:
+        conn.execute("ALTER TABLE discord_messages ADD COLUMN claimed_at INTEGER")
+    conn.commit()
+
 def _migrate_projects_type_open(conn: sqlite3.Connection):
     """Drop the legacy CHECK(type IN (...)) on projects.type so new project types
     (server_code, etc.) need no schema migration — types are validated in code now.
@@ -435,6 +445,7 @@ def init_db() -> sqlite3.Connection:
     _migrate_themes_project(conn)
     _migrate_projects_type_open(conn)
     _migrate_discord_image(conn)
+    _migrate_discord_send_error(conn)
     conn.commit()
     return conn
 
@@ -622,11 +633,13 @@ def undelivered_outbound(stale_after_sec: int = UNDELIVERED_AFTER_SEC) -> list[d
 
     Two writers queue outbound rows -- scripts/discord_send.py and the uptime
     monitor's _queue_discord -- and neither can observe delivery on its own.
+    Excludes rows with send_error set (permanent failures the bot already tried).
     """
     conn = get_connection()
     rows = conn.execute(
         "SELECT id, created_at, channel_id, content FROM discord_messages "
         "WHERE direction = 'outbound' AND (discord_message_id IS NULL OR discord_message_id = '') "
+        "AND send_error IS NULL "
         "AND created_at < ? ORDER BY created_at ASC",
         (epoch() - stale_after_sec,),
     ).fetchall()

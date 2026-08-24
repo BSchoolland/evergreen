@@ -11,6 +11,8 @@ them from there. Then post it:
 cd /home/ben/Projects/evergreen && python3 scripts/discord_send.py --image <path> --channel <id> --no-wait "<short caption>"
 ```
 
+Note: `--no-wait` skips waiting for a reply but still confirms delivery (~60s).
+
 Use the channel from `/read-config-evergreen` (a project's alert channel, or the instance
 default).
 

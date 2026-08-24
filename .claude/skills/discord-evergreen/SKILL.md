@@ -2,7 +2,7 @@ Send a message via the evergreen Discord bot.
 
 Use `/read-config-evergreen` to get the `discord_channel_id` and `owner_name`.
 
-Use `python3 scripts/discord_send.py "message" --channel <discord_channel_id>`. By default it waits up to 3 hours for a reply (printed to stdout). Use `--no-wait` for fire-and-forget, or `--timeout SECONDS` for a custom wait.
+Use `python3 scripts/discord_send.py "message" --channel <discord_channel_id>`. By default it waits up to 3 hours for a reply (printed to stdout). Use `--no-wait` to skip waiting for a reply (still confirms delivery takes ~60s); use `--timeout SECONDS` for a custom wait.
 
 If discord chat v2 is active (`configs` key `discord_chat` = `v2`), always send with `--no-wait` — replies are handled live by the chat agent, so a waiting poll would never see them.
 

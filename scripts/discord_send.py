@@ -148,7 +148,7 @@ def main():
     parser.add_argument("message", nargs="?", default="", help="Message content (optional when sending an image)")
     parser.add_argument("--channel", required=True, help="Discord channel ID")
     parser.add_argument("--image", help="Path to a local PNG/image to attach")
-    parser.add_argument("--no-wait", action="store_true", help="Don't wait for a reply (fire and forget)")
+    parser.add_argument("--no-wait", action="store_true", help="Don't wait for a reply; still confirms delivery within 60s")
     parser.add_argument("--timeout", type=int, default=10800, help="Reply timeout in seconds (default: 3 hours)")
 
     args = parser.parse_args()
