@@ -62,6 +62,7 @@ def ensure_bot_running():
     if _bot_running():
         return
     print("Bot not running, starting it...", file=sys.stderr)
+    EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
     log = open(BOT_LOG_FILE, "a")
     proc = subprocess.Popen(
         ["node", "index.js"],
