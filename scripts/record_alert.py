@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from evergreen.db import current_project_id, get_connection
+from evergreen.alerts import alert_dedupe_key
+from evergreen.db import current_project_id, get_connection, init_db
 
 
 def resolve_project_id(explicit=None):
@@ -30,13 +31,14 @@ def record_alert(
     project_id=None,
 ):
     project_id = resolve_project_id(project_id)
-    conn = get_connection()
+    conn = init_db()  # not get_connection(): the dedupe_key migration must have run
     try:
         conn.execute(
             """INSERT INTO security_alerts
-               (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id),
+               (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id, dedupe_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id,
+             alert_dedupe_key(cve, name, affected_component, summary)),
         )
         conn.commit()
         row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -54,15 +56,15 @@ def record_alert(
 def record_batch(alerts, project_id=None):
     """Insert multiple alerts from a list of dicts. Returns (inserted, skipped) counts."""
     project_id = resolve_project_id(project_id)
-    conn = get_connection()
+    conn = init_db()  # not get_connection(): the dedupe_key migration must have run
     inserted, skipped = 0, 0
     try:
         for a in alerts:
             try:
                 conn.execute(
                     """INSERT INTO security_alerts
-                       (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (project_id, source, source_url, article_url, cve, name, severity, affected_component, summary, impact_assessment, pr_url, pr_status, discord_message_id, dedupe_key)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         project_id,
                         a["source"],
@@ -77,6 +79,7 @@ def record_batch(alerts, project_id=None):
                         a.get("pr_url"),
                         a.get("pr_status"),
                         a.get("discord_message_id"),
+                        alert_dedupe_key(a.get("cve"), a.get("name"), a.get("affected_component"), a["summary"]),
                     ),
                 )
                 inserted += 1

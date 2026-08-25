@@ -77,12 +77,18 @@ CREATE TABLE IF NOT EXISTS security_alerts (
   pr_url TEXT,
   pr_status TEXT CHECK(pr_status IN ('open', 'merged', 'closed')),
   discord_message_id TEXT,
+  -- Computed identity for dedup (see evergreen.alerts.alert_dedupe_key): the
+  -- advisory id when one exists, else normalized name+component. Never NULL on
+  -- insert; NULL only marks pre-migration duplicate rows kept for history.
+  dedupe_key TEXT,
   status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'not_affected', 'not_actionable', 'in_progress', 'backlog', 'action_needed', 'resolved', 'dismissed')),
   resolved_at INTEGER,
   disposition_reason TEXT,
   dismissed_by TEXT CHECK(dismissed_by IN ('verify', 'pr_closed', 'owner')),
   UNIQUE(project_id, source, cve, source_url)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_dedupe
+  ON security_alerts(project_id, source, dedupe_key) WHERE dedupe_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS discord_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
