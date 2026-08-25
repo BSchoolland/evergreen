@@ -416,6 +416,40 @@ def _migrate_themes_project(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _migrate_alert_dedupe(conn: sqlite3.Connection):
+    """Add dedupe_key to security_alerts and backfill it.
+
+    UNIQUE(project_id, source, cve, source_url) never fires for the ~90% of
+    alerts with a NULL cve (SQLite treats NULLs as distinct), so audit re-runs
+    filed the same advisory over and over. dedupe_key is a computed identity
+    (see evergreen.alerts.alert_dedupe_key) enforced by a partial unique index.
+    Backfill keeps the key on one row per duplicate group — preferring a
+    non-dismissed row — and leaves the rest NULL so history survives without
+    tripping the index. Must run before executescript: schema.sql's index
+    statement references the column."""
+    from evergreen.alerts import alert_dedupe_key
+
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(security_alerts)").fetchall()]
+    except sqlite3.OperationalError:
+        return
+    if not cols or "dedupe_key" in cols:
+        return
+    conn.execute("ALTER TABLE security_alerts ADD COLUMN dedupe_key TEXT")
+    rows = conn.execute(
+        "SELECT id, project_id, source, cve, name, affected_component, summary, status "
+        "FROM security_alerts"
+    ).fetchall()
+    groups: dict[tuple, list] = {}
+    for id_, pid, source, cve, name, comp, summary, status in rows:
+        key = alert_dedupe_key(cve, name, comp, summary)
+        groups.setdefault((pid, source, key), []).append((id_, status))
+    for (pid, source, key), members in groups.items():
+        anchor = min(members, key=lambda m: (m[1] == "dismissed", m[0]))[0]
+        conn.execute("UPDATE security_alerts SET dedupe_key = ? WHERE id = ?", (key, anchor))
+    conn.commit()
+
+
 def init_db() -> sqlite3.Connection:
     EVERGREEN_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -429,6 +463,7 @@ def init_db() -> sqlite3.Connection:
     _migrate_run_review_links(conn)
     _migrate_skill_queue(conn)
     _migrate_project_spine(conn)
+    _migrate_alert_dedupe(conn)
     conn.executescript(_read_schema())
     _seed_model_pricing(conn)
     _migrate_themes_link(conn)

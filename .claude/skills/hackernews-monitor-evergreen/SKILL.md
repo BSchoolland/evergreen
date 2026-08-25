@@ -28,6 +28,6 @@ Scan HackerNews for security vulnerabilities relevant to the monitored project's
 ## Notes
 
 - Skip posts already marked `[TRACKED]` unless you have new information about them.
-- The script deduplicates on `(source, cve, source_url)` so re-running is safe.
+- The script deduplicates per project on the advisory id in `--cve` (falling back to normalized name + component), so re-running is safe.
 - If the NVD or article page doesn't render well, check HN comments — they often have the best technical summary.
-- Use real CVE IDs when they exist. Leave the CVE field null when there isn't one — don't invent placeholder identifiers. Use the `--name` field for common names when the vulnerability has one.
+- Put the advisory id (CVE, or GHSA when there's no CVE) in `--cve` when one exists. Leave it null when there isn't one — don't invent placeholder identifiers. Use the `--name` field for common names when the vulnerability has one.

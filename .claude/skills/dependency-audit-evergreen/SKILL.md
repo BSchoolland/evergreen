@@ -24,6 +24,6 @@ Run a dependency audit on the monitored project and assess real risk.
 
 ## Notes
 
-- The script deduplicates on `(source, cve, source_url)` so re-running is safe.
-- Use real CVE IDs when they exist. Leave the CVE field null when there isn't one. Use `--name` for common names when the vulnerability has one.
+- The script deduplicates per project on the advisory id in `--cve` (falling back to normalized name + component), so re-running is safe.
+- Always put the advisory id in `--cve`, exactly as the audit tool reports it (GHSA ids for npm/bun audit) — a consistent id per source is what makes dedup fire. Only leave it null when the advisory truly has no id. Use `--name` for common names when the vulnerability has one.
 - Moderate and low vulns in devDependencies can usually be recorded as info and moved on.
