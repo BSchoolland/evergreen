@@ -6,6 +6,9 @@ runs one or more pi agents that read the diff plus surrounding code and report
 findings. Prints the combined review to stdout. Read-only: the reviewers may run
 git and read files, but never edit the repo.
 
+Lenses run in parallel against a hosted API, but one at a time against a
+self-hosted model, which serves one request at a time. Override with --jobs.
+
 Each review lens is recorded in Evergreen's `runs` table with its Pi cost/tokens.
 When the script runs inside a skill invocation, `EVERGREEN_RUN_ID` links the
 review batch back to the parent triage run; PR URL and branch are recorded too.
@@ -13,18 +16,22 @@ review batch back to the parent triage run; PR URL and branch are recorded too.
 Usage:
   review-branch.py --dir /path/to/repo --branch my-branch [--base origin/master]
   review-branch.py --dir /path/to/repo --branch my-branch --lens correctness,security
+  review-branch.py --dir /path/to/repo --branch my-branch --jobs 1
 """
 
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import ipaddress
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +57,11 @@ Report only real, actionable findings. For each: `file:line` — what's wrong �
 
 REVIEW_SESSION_ROOT = REPO / ".pi" / "sessions" / "reviews"
 REVIEW_TIMEOUT_SECONDS = 900
+
+# pi's own config resolution, mirrored: $PI_CODING_AGENT_DIR, else ~/.pi/agent.
+PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR"
+PI_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh"}
+LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain", "ip6-localhost"}
 
 
 @dataclass
@@ -151,6 +163,74 @@ def read_session_metrics(session_dir: Path) -> tuple[float | None, int | None, s
         return None, None, None, None
 
 
+def pi_agent_dir() -> Path:
+    env = os.environ.get(PI_AGENT_DIR_ENV)
+    return Path(env).expanduser() if env else Path.home() / ".pi" / "agent"
+
+
+def read_pi_config(name: str) -> dict:
+    """Absent means pi is on its built-in providers, which are all hosted APIs.
+    Malformed means we cannot tell what the model resolves to, so stop."""
+    path = pi_agent_dir() / name
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        sys.exit(f"Could not read pi config {path} ({e}); pass --jobs to set lens concurrency explicitly.")
+
+
+def strip_thinking_suffix(model: str) -> str:
+    """`qwen3.8:27b` keeps its tag; `openai-codex/gpt-5.5:high` loses the level."""
+    head, sep, tail = model.rpartition(":")
+    return head if sep and tail in PI_THINKING_LEVELS else model
+
+
+def resolve_provider(model: str | None, settings: dict, models_cfg: dict) -> str | None:
+    """Which pi provider will serve `model` (None = pi's configured default)."""
+    if not model:
+        return settings.get("defaultProvider")
+    ref = strip_thinking_suffix(model)
+    if "/" in ref:
+        return ref.split("/", 1)[0]
+    for provider, cfg in models_cfg.get("providers", {}).items():
+        if any(m.get("id") == ref for m in cfg.get("models", [])):
+            return provider
+    return None
+
+
+def is_self_hosted_url(url: str) -> bool:
+    host = urllib.parse.urlparse(url).hostname
+    if not host:
+        return False
+    if host in LOCAL_HOSTNAMES or host.endswith(".local"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        return False
+
+
+def resolve_jobs(lens_count: int, model: str | None) -> tuple[int, str]:
+    """How many lenses to run at once, and why.
+
+    A self-hosted backend on one GPU queues concurrent requests instead of
+    batching them, so N lenses each take ~N times as long and all of them
+    straddle REVIEW_TIMEOUT_SECONDS. Run those one at a time. Only providers
+    declared in the user's models.json carry a baseUrl; pi's built-in providers
+    are all hosted APIs, which parallelise fine.
+    """
+    models_cfg = read_pi_config("models.json")
+    provider = resolve_provider(model, read_pi_config("settings.json"), models_cfg)
+    if not provider:
+        target = f"model {model!r}" if model else "pi's default model"
+        return lens_count, f"no models.json provider serves {target}, assuming a hosted API"
+    base_url = models_cfg.get("providers", {}).get(provider, {}).get("baseUrl")
+    if base_url and is_self_hosted_url(base_url):
+        return 1, f"provider {provider!r} is self-hosted ({base_url}) and serves one request at a time"
+    return lens_count, f"provider {provider!r} is a hosted API"
+
+
 def review(dir_: str, branch: str, base: str, name: str, model: str | None,
            thinking: str | None, session_dir: Path, batch_run_id: int | None,
            pr_url: str | None) -> ReviewResult:
@@ -181,7 +261,9 @@ def review(dir_: str, branch: str, base: str, name: str, model: str | None,
         summary = out if returncode == 0 else f"exit={returncode}\n{out}"
     except subprocess.TimeoutExpired as e:
         timed_out = True
-        out = f"(review timed out after {REVIEW_TIMEOUT_SECONDS}s)"
+        out = (f"!! The {name} lens FAILED: killed at the {REVIEW_TIMEOUT_SECONDS}s timeout before "
+               f"it produced a review. Nothing was reviewed — this is a tooling failure, not a "
+               f"clean bill of health. Re-run this lens. Transcript: {session_dir}")
         if e.stdout:
             out += "\n\nPartial stdout:\n" + str(e.stdout).strip()
         if e.stderr:
@@ -191,15 +273,17 @@ def review(dir_: str, branch: str, base: str, name: str, model: str | None,
     cost, tokens, used_model, effort = read_session_metrics(session_dir)
     update_run(run_id, summary=summary, cost=cost, tokens=tokens,
                model=used_model, effort=effort)
+    print(f"{name}: {'TIMED OUT' if timed_out else 'done'}", file=sys.stderr, flush=True)
     return ReviewResult(name, out, run_id, timed_out, returncode, cost, tokens, used_model, effort)
 
 
-def summarize_batch(branch: str, base: str, pr_url: str | None, results: list[ReviewResult]) -> str:
+def summarize_batch(branch: str, base: str, pr_url: str | None, results: list[ReviewResult],
+                    jobs: int) -> str:
     timeouts = [r.name for r in results if r.timed_out]
     failures = [r.name for r in results if r.returncode not in (0, None)]
     cost = sum(r.cost or 0 for r in results)
     tokens = sum(r.tokens or 0 for r in results)
-    bits = [f"Reviewed {branch} vs {base}: {len(results)} lens(es)"]
+    bits = [f"Reviewed {branch} vs {base}: {len(results)} lens(es), {jobs} at a time"]
     if pr_url:
         bits.append(pr_url)
     if cost or tokens:
@@ -220,6 +304,9 @@ def main():
                    help="Comma-separated lenses: " + ", ".join(LENSES))
     p.add_argument("--model", help="pi model override (default: pi's configured model)")
     p.add_argument("--thinking", default="high", help="pi thinking level (default: high)")
+    p.add_argument("--jobs", type=int,
+                   help="Lenses to run concurrently (default: 1 for a self-hosted model, "
+                        "all lenses for a hosted API)")
     p.add_argument("--parent-run-id", type=int, default=parse_parent_run_id(os.environ.get("EVERGREEN_RUN_ID")),
                    help="Evergreen parent run id (defaults to EVERGREEN_RUN_ID)")
     p.add_argument("--pr-url", help="PR URL override (otherwise inferred with gh)")
@@ -231,6 +318,10 @@ def main():
     bad = [l for l in lenses if l not in LENSES]
     if bad:
         sys.exit(f"Unknown lens(es): {', '.join(bad)}. Available: {', '.join(LENSES)}")
+    if not lenses:
+        sys.exit(f"No lenses selected. Available: {', '.join(LENSES)}")
+    if args.jobs is not None and args.jobs < 1:
+        sys.exit(f"--jobs must be at least 1, got {args.jobs}")
 
     conn = init_db()
     conn.close()
@@ -253,7 +344,14 @@ def main():
         pr_url,
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(lenses)) as ex:
+    if args.jobs is None:
+        jobs, reason = resolve_jobs(len(lenses), args.model)
+    else:
+        jobs, reason = args.jobs, "set explicitly with --jobs"
+    jobs = min(jobs, len(lenses))
+    print(f"Running {len(lenses)} lens(es), {jobs} at a time: {reason}", file=sys.stderr, flush=True)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
         futures = [
             ex.submit(review, args.dir, args.branch, args.base, name, args.model,
                       args.thinking, batch_dir / name, batch_run_id, pr_url)
@@ -261,7 +359,7 @@ def main():
         ]
         results = [f.result() for f in futures]
 
-    update_run(batch_run_id, summary=summarize_batch(args.branch, args.base, pr_url, results),
+    update_run(batch_run_id, summary=summarize_batch(args.branch, args.base, pr_url, results, jobs),
                cost=None, tokens=None, model=None, effort=None)
 
     for result in results:
