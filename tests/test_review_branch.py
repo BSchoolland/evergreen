@@ -177,6 +177,20 @@ class ResolveJobs(unittest.TestCase):
         self.assertEqual(jobs, 3)
         self.assertIn("openrouter", reason)
 
+    def test_project_settings_that_is_not_a_regular_file_is_ignored(self):
+        pi_dir = Path(self.repo) / ".pi"
+        pi_dir.mkdir()
+        (pi_dir / "settings.json").symlink_to("/dev/zero")
+        jobs, _ = review_branch.resolve_jobs(3, None, self.repo)
+        self.assertEqual(jobs, 1)  # falls back to the global default, does not hang
+
+    def test_oversized_project_settings_is_refused(self):
+        pi_dir = Path(self.repo) / ".pi"
+        pi_dir.mkdir()
+        (pi_dir / "settings.json").write_text(" " * (review_branch.PI_CONFIG_MAX_BYTES + 1))
+        with self.assertRaises(SystemExit):
+            review_branch.resolve_jobs(3, None, self.repo)
+
     def test_unresolvable_model_serializes_when_a_local_provider_exists(self):
         # No defaultProvider/defaultModel: pi picks the first authenticated model,
         # which may be the local one. Serializing costs less than timing out.

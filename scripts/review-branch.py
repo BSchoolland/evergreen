@@ -62,6 +62,7 @@ REVIEW_TIMEOUT_SECONDS = 900
 PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR"
 PI_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh"}
 LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain", "ip6-localhost"}
+PI_CONFIG_MAX_BYTES = 1 << 20
 
 
 @dataclass
@@ -182,9 +183,16 @@ def strip_json_comments(text: str) -> str:
 
 def read_pi_json(path: Path) -> dict:
     """Absent means pi is on its built-in providers, which are all hosted APIs.
-    Malformed means we cannot tell what the model resolves to, so stop."""
-    if not path.exists():
+    Malformed means we cannot tell what the model resolves to, so stop.
+
+    The project copy comes from the branch under review, so refuse anything that
+    is not a small regular file rather than block on a device or a huge one.
+    """
+    if not path.is_file():
         return {}
+    if path.stat().st_size > PI_CONFIG_MAX_BYTES:
+        sys.exit(f"pi config {path} exceeds {PI_CONFIG_MAX_BYTES} bytes; "
+                 f"pass --jobs to set lens concurrency explicitly.")
     try:
         return json.loads(strip_json_comments(path.read_text()))
     except (OSError, ValueError) as e:
