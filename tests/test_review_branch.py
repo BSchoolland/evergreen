@@ -67,8 +67,16 @@ class ResolveEndpoint(unittest.TestCase):
     def test_per_model_base_url_overrides_the_provider(self):
         self.assertEqual(self.endpoint("openai/local-proxy"), ("openai", "http://127.0.0.1:8080/v1"))
 
-    def test_unknown_bare_id_falls_back_to_the_default_provider(self):
-        self.assertEqual(self.endpoint("gpt-5.5"), ("ollama", None))
+    def test_unlisted_id_still_gets_the_default_providers_base_url(self):
+        # A provider-level baseUrl overrides its built-in models' URLs, so an id
+        # that is not in the models list still goes to that endpoint.
+        self.assertEqual(self.endpoint("gpt-5.5"), ("ollama", "http://127.0.0.1:11434/v1"))
+
+    def test_base_url_only_provider_is_still_self_hosted(self):
+        cfg = {"providers": {"anthropic": {"baseUrl": "http://127.0.0.1:8080/v1"}}}
+        settings = {"defaultProvider": "anthropic", "defaultModel": "claude-opus-4-7"}
+        self.assertEqual(review_branch.resolve_endpoint(None, settings, cfg),
+                         ("anthropic", "http://127.0.0.1:8080/v1"))
 
     def test_no_model_uses_pi_default_model(self):
         self.assertEqual(self.endpoint(None), ("ollama", "http://127.0.0.1:11434/v1"))
@@ -89,6 +97,23 @@ class IsSelfHostedUrl(unittest.TestCase):
         for url in ("https://openrouter.ai/api/v1", "https://api.anthropic.com",
                     "https://8.8.8.8/v1"):
             self.assertFalse(review_branch.is_self_hosted_url(url), url)
+
+
+class StripJsonComments(unittest.TestCase):
+    def test_comments_and_trailing_commas(self):
+        text = """{
+          // pi accepts this
+          "providers": {
+            "ollama": {"baseUrl": "http://127.0.0.1:11434/v1"},
+          },
+        }"""
+        self.assertEqual(json.loads(review_branch.strip_json_comments(text))["providers"]["ollama"],
+                         {"baseUrl": "http://127.0.0.1:11434/v1"})
+
+    def test_a_url_inside_a_string_is_not_a_comment(self):
+        text = '{"baseUrl": "https://openrouter.ai/api/v1"}'
+        self.assertEqual(json.loads(review_branch.strip_json_comments(text)),
+                         {"baseUrl": "https://openrouter.ai/api/v1"})
 
 
 class ResolveJobs(unittest.TestCase):
@@ -133,6 +158,15 @@ class ResolveJobs(unittest.TestCase):
         with unittest.mock.patch.dict("os.environ", {review_branch.PI_AGENT_DIR_ENV: "/nonexistent"}):
             jobs, _ = review_branch.resolve_jobs(3, None)
         self.assertEqual(jobs, 3)
+
+    def test_unresolvable_model_serializes_when_a_local_provider_exists(self):
+        # No defaultProvider/defaultModel: pi picks the first authenticated model,
+        # which may be the local one. Serializing costs less than timing out.
+        agent_dir = Path(self.tmp.name)
+        (agent_dir / "settings.json").write_text("{}")
+        jobs, reason = review_branch.resolve_jobs(3, None)
+        self.assertEqual(jobs, 1)
+        self.assertIn("ollama", reason)
 
 
 if __name__ == "__main__":

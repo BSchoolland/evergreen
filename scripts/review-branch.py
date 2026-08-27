@@ -168,6 +168,18 @@ def pi_agent_dir() -> Path:
     return Path(env).expanduser() if env else Path.home() / ".pi" / "agent"
 
 
+JSONC_COMMENT = re.compile(r'"(?:\\.|[^"\\])*"|//[^\n]*')
+JSONC_TRAILING_COMMA = re.compile(r'"(?:\\.|[^"\\])*"|,(\s*[}\]])')
+
+
+def strip_json_comments(text: str) -> str:
+    """pi accepts // comments and trailing commas in its config (model-registry.js
+    stripJsonComments); reject nothing it would have parsed."""
+    text = JSONC_COMMENT.sub(lambda m: m[0] if m[0].startswith('"') else "", text)
+    return JSONC_TRAILING_COMMA.sub(
+        lambda m: m[1] if m[1] is not None else (m[0] if m[0].startswith('"') else ""), text)
+
+
 def read_pi_config(name: str) -> dict:
     """Absent means pi is on its built-in providers, which are all hosted APIs.
     Malformed means we cannot tell what the model resolves to, so stop."""
@@ -175,7 +187,7 @@ def read_pi_config(name: str) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        return json.loads(strip_json_comments(path.read_text()))
     except (OSError, ValueError) as e:
         sys.exit(f"Could not read pi config {path} ({e}); pass --jobs to set lens concurrency explicitly.")
 
@@ -196,11 +208,8 @@ def resolve_endpoint(model: str | None, settings: dict,
     """
     providers = models_cfg.get("providers", {})
     ref = strip_thinking_suffix(model) if model else settings.get("defaultModel")
-    if not ref:
-        provider = settings.get("defaultProvider")
-        return provider, providers.get(provider, {}).get("baseUrl")
+    head, sep, tail = (ref or "").partition("/")
 
-    head, sep, tail = ref.partition("/")
     if sep and head in providers:
         provider, model_id = head, tail
     else:
@@ -208,10 +217,10 @@ def resolve_endpoint(model: str | None, settings: dict,
                          if any(m.get("id") == ref for m in cfg.get("models", []))), None)
         model_id = ref
     if provider is None:
-        # Not in models.json: a built-in provider prefix, or pi's own default.
-        return (head if sep else settings.get("defaultProvider")), None
+        # An undeclared prefix names a built-in provider; otherwise pi's default.
+        provider = head if sep else settings.get("defaultProvider")
 
-    cfg = providers[provider]
+    cfg = providers.get(provider, {})
     per_model = next((m.get("baseUrl") for m in cfg.get("models", [])
                       if m.get("id") == model_id), None)
     return provider, per_model or cfg.get("baseUrl")
@@ -238,12 +247,17 @@ def resolve_jobs(lens_count: int, model: str | None) -> tuple[int, str]:
     declared in the user's models.json carry a baseUrl; pi's built-in providers
     are all hosted APIs, which parallelise fine.
     """
-    provider, base_url = resolve_endpoint(model, read_pi_config("settings.json"),
-                                          read_pi_config("models.json"))
+    models_cfg = read_pi_config("models.json")
+    provider, base_url = resolve_endpoint(model, read_pi_config("settings.json"), models_cfg)
     if base_url and is_self_hosted_url(base_url):
         return 1, f"provider {provider!r} is self-hosted ({base_url}) and serves one request at a time"
     if not provider:
         target = f"model {model!r}" if model else "pi's default model"
+        self_hosted = [p for p, cfg in models_cfg.get("providers", {}).items()
+                       if is_self_hosted_url(cfg.get("baseUrl") or "")]
+        if self_hosted:
+            return 1, (f"could not resolve a provider for {target}; pi may pick "
+                       f"self-hosted {', '.join(sorted(self_hosted))}")
         return lens_count, f"could not resolve a provider for {target}, assuming a hosted API"
     return lens_count, f"provider {provider!r} is a hosted API"
 
@@ -279,12 +293,12 @@ def review(dir_: str, branch: str, base: str, name: str, model: str | None,
     except subprocess.TimeoutExpired as e:
         timed_out = True
         out = (f"!! The {name} lens FAILED: killed at the {REVIEW_TIMEOUT_SECONDS}s timeout before "
-               f"it produced a review. Nothing was reviewed — this is a tooling failure, not a "
+               f"it finished. It did not deliver a review — this is a tooling failure, not a "
                f"clean bill of health. Re-run this lens. Transcript: {session_dir}")
         if e.stdout:
-            out += "\n\nPartial stdout:\n" + str(e.stdout).strip()
+            out += "\n\nIncomplete stdout:\n" + str(e.stdout).strip()
         if e.stderr:
-            out += "\n\nPartial stderr:\n" + str(e.stderr).strip()
+            out += "\n\nIncomplete stderr:\n" + str(e.stderr).strip()
         summary = f"TIMEOUT after {REVIEW_TIMEOUT_SECONDS}s\n{out}"
 
     cost, tokens, used_model, effort = read_session_metrics(session_dir)
