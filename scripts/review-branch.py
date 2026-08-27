@@ -180,16 +180,22 @@ def strip_json_comments(text: str) -> str:
         lambda m: m[1] if m[1] is not None else (m[0] if m[0].startswith('"') else ""), text)
 
 
-def read_pi_config(name: str) -> dict:
+def read_pi_json(path: Path) -> dict:
     """Absent means pi is on its built-in providers, which are all hosted APIs.
     Malformed means we cannot tell what the model resolves to, so stop."""
-    path = pi_agent_dir() / name
     if not path.exists():
         return {}
     try:
         return json.loads(strip_json_comments(path.read_text()))
     except (OSError, ValueError) as e:
         sys.exit(f"Could not read pi config {path} ({e}); pass --jobs to set lens concurrency explicitly.")
+
+
+def read_pi_settings(dir_: str) -> dict:
+    """pi deep-merges <cwd>/.pi/settings.json over the global one, and the reviewers
+    run with cwd=dir_ — so the repo under review can pick the model."""
+    return {**read_pi_json(pi_agent_dir() / "settings.json"),
+            **read_pi_json(Path(dir_) / ".pi" / "settings.json")}
 
 
 def strip_thinking_suffix(model: str) -> str:
@@ -217,8 +223,9 @@ def resolve_endpoint(model: str | None, settings: dict,
                          if any(m.get("id") == ref for m in cfg.get("models", []))), None)
         model_id = ref
     if provider is None:
-        # An undeclared prefix names a built-in provider; otherwise pi's default.
-        provider = head if sep else settings.get("defaultProvider")
+        # An undeclared prefix names a built-in provider. A bare id is pi's to place
+        # against its full registry, so only answer for the model pi would default to.
+        provider = head if sep else (None if model else settings.get("defaultProvider"))
 
     cfg = providers.get(provider, {})
     per_model = next((m.get("baseUrl") for m in cfg.get("models", [])
@@ -238,7 +245,7 @@ def is_self_hosted_url(url: str) -> bool:
         return False
 
 
-def resolve_jobs(lens_count: int, model: str | None) -> tuple[int, str]:
+def resolve_jobs(lens_count: int, model: str | None, dir_: str) -> tuple[int, str]:
     """How many lenses to run at once, and why.
 
     A self-hosted backend on one GPU queues concurrent requests instead of
@@ -247,8 +254,8 @@ def resolve_jobs(lens_count: int, model: str | None) -> tuple[int, str]:
     declared in the user's models.json carry a baseUrl; pi's built-in providers
     are all hosted APIs, which parallelise fine.
     """
-    models_cfg = read_pi_config("models.json")
-    provider, base_url = resolve_endpoint(model, read_pi_config("settings.json"), models_cfg)
+    models_cfg = read_pi_json(pi_agent_dir() / "models.json")
+    provider, base_url = resolve_endpoint(model, read_pi_settings(dir_), models_cfg)
     if base_url and is_self_hosted_url(base_url):
         return 1, f"provider {provider!r} is self-hosted ({base_url}) and serves one request at a time"
     if not provider:
@@ -369,7 +376,7 @@ def main():
     pr_url = args.pr_url or infer_pr_url(args.dir, args.branch)
     batch_dir = REVIEW_SESSION_ROOT / f"run-{args.parent_run_id or 'standalone'}-{safe_slug(args.branch)}-{epoch()}"
     if args.jobs is None:
-        jobs, reason = resolve_jobs(len(lenses), args.model)
+        jobs, reason = resolve_jobs(len(lenses), args.model, args.dir)
     else:
         jobs, reason = args.jobs, "set explicitly with --jobs"
     jobs = min(jobs, len(lenses))
