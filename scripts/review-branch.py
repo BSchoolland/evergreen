@@ -186,17 +186,35 @@ def strip_thinking_suffix(model: str) -> str:
     return head if sep and tail in PI_THINKING_LEVELS else model
 
 
-def resolve_provider(model: str | None, settings: dict, models_cfg: dict) -> str | None:
-    """Which pi provider will serve `model` (None = pi's configured default)."""
-    if not model:
-        return settings.get("defaultProvider")
-    ref = strip_thinking_suffix(model)
-    if "/" in ref:
-        return ref.split("/", 1)[0]
-    for provider, cfg in models_cfg.get("providers", {}).items():
-        if any(m.get("id") == ref for m in cfg.get("models", [])):
-            return provider
-    return None
+def resolve_endpoint(model: str | None, settings: dict,
+                     models_cfg: dict) -> tuple[str | None, str | None]:
+    """The pi provider and base URL that will serve `model` (None = pi's default).
+
+    A model entry may override its provider's baseUrl, so resolve the model, not
+    just the provider. A slash is only a provider prefix when it names a declared
+    provider — ollama model ids carry slashes of their own (`hf.co/user/repo`).
+    """
+    providers = models_cfg.get("providers", {})
+    ref = strip_thinking_suffix(model) if model else settings.get("defaultModel")
+    if not ref:
+        provider = settings.get("defaultProvider")
+        return provider, providers.get(provider, {}).get("baseUrl")
+
+    head, sep, tail = ref.partition("/")
+    if sep and head in providers:
+        provider, model_id = head, tail
+    else:
+        provider = next((p for p, cfg in providers.items()
+                         if any(m.get("id") == ref for m in cfg.get("models", []))), None)
+        model_id = ref
+    if provider is None:
+        # Not in models.json: a built-in provider prefix, or pi's own default.
+        return (head if sep else settings.get("defaultProvider")), None
+
+    cfg = providers[provider]
+    per_model = next((m.get("baseUrl") for m in cfg.get("models", [])
+                      if m.get("id") == model_id), None)
+    return provider, per_model or cfg.get("baseUrl")
 
 
 def is_self_hosted_url(url: str) -> bool:
@@ -220,14 +238,13 @@ def resolve_jobs(lens_count: int, model: str | None) -> tuple[int, str]:
     declared in the user's models.json carry a baseUrl; pi's built-in providers
     are all hosted APIs, which parallelise fine.
     """
-    models_cfg = read_pi_config("models.json")
-    provider = resolve_provider(model, read_pi_config("settings.json"), models_cfg)
-    if not provider:
-        target = f"model {model!r}" if model else "pi's default model"
-        return lens_count, f"no models.json provider serves {target}, assuming a hosted API"
-    base_url = models_cfg.get("providers", {}).get(provider, {}).get("baseUrl")
+    provider, base_url = resolve_endpoint(model, read_pi_config("settings.json"),
+                                          read_pi_config("models.json"))
     if base_url and is_self_hosted_url(base_url):
         return 1, f"provider {provider!r} is self-hosted ({base_url}) and serves one request at a time"
+    if not provider:
+        target = f"model {model!r}" if model else "pi's default model"
+        return lens_count, f"could not resolve a provider for {target}, assuming a hosted API"
     return lens_count, f"provider {provider!r} is a hosted API"
 
 
@@ -273,7 +290,8 @@ def review(dir_: str, branch: str, base: str, name: str, model: str | None,
     cost, tokens, used_model, effort = read_session_metrics(session_dir)
     update_run(run_id, summary=summary, cost=cost, tokens=tokens,
                model=used_model, effort=effort)
-    print(f"{name}: {'TIMED OUT' if timed_out else 'done'}", file=sys.stderr, flush=True)
+    state = "TIMED OUT" if timed_out else ("done" if returncode == 0 else f"FAILED exit={returncode}")
+    print(f"{name}: {state}", file=sys.stderr, flush=True)
     return ReviewResult(name, out, run_id, timed_out, returncode, cost, tokens, used_model, effort)
 
 
@@ -336,6 +354,13 @@ def main():
 
     pr_url = args.pr_url or infer_pr_url(args.dir, args.branch)
     batch_dir = REVIEW_SESSION_ROOT / f"run-{args.parent_run_id or 'standalone'}-{safe_slug(args.branch)}-{epoch()}"
+    if args.jobs is None:
+        jobs, reason = resolve_jobs(len(lenses), args.model)
+    else:
+        jobs, reason = args.jobs, "set explicitly with --jobs"
+    jobs = min(jobs, len(lenses))
+    print(f"Running {len(lenses)} lens(es), {jobs} at a time: {reason}", file=sys.stderr, flush=True)
+
     batch_run_id = insert_run(
         "review",
         f"Reviewing {args.branch} vs {args.base}",
@@ -343,13 +368,6 @@ def main():
         args.branch,
         pr_url,
     )
-
-    if args.jobs is None:
-        jobs, reason = resolve_jobs(len(lenses), args.model)
-    else:
-        jobs, reason = args.jobs, "set explicitly with --jobs"
-    jobs = min(jobs, len(lenses))
-    print(f"Running {len(lenses)} lens(es), {jobs} at a time: {reason}", file=sys.stderr, flush=True)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
         futures = [

@@ -22,43 +22,60 @@ OLLAMA_MODELS = {
     "providers": {
         "ollama": {
             "baseUrl": "http://127.0.0.1:11434/v1",
-            "models": [{"id": "qwen3.8:27b"}, {"id": "qwen3.6:35b-a3b"}],
+            "models": [{"id": "qwen3.8:27b"}, {"id": "hf.co/user/repo"}],
         },
         "openrouter": {
             "baseUrl": "https://openrouter.ai/api/v1",
             "models": [{"id": "moonshotai/kimi-k2.6"}],
         },
+        # A hosted provider with one model pinned to a local endpoint.
+        "openai": {"models": [{"id": "local-proxy", "baseUrl": "http://127.0.0.1:8080/v1"}]},
     }
 }
 
+PI_SETTINGS = {"defaultProvider": "ollama", "defaultModel": "qwen3.8:27b"}
 
-class ResolveProvider(unittest.TestCase):
-    def test_provider_prefix_wins(self):
-        self.assertEqual(
-            review_branch.resolve_provider("openai-codex/gpt-5.5", {}, OLLAMA_MODELS),
-            "openai-codex",
-        )
+
+class ResolveEndpoint(unittest.TestCase):
+    def endpoint(self, model, settings=PI_SETTINGS):
+        return review_branch.resolve_endpoint(model, settings, OLLAMA_MODELS)
+
+    def test_declared_provider_prefix(self):
+        self.assertEqual(self.endpoint("ollama/qwen3.8:27b"),
+                         ("ollama", "http://127.0.0.1:11434/v1"))
+
+    def test_builtin_provider_prefix_has_no_base_url(self):
+        self.assertEqual(self.endpoint("openai-codex/gpt-5.5"), ("openai-codex", None))
 
     def test_thinking_suffix_is_stripped(self):
-        self.assertEqual(
-            review_branch.resolve_provider("openai-codex/gpt-5.5:high", {}, OLLAMA_MODELS),
-            "openai-codex",
-        )
+        self.assertEqual(self.endpoint("openai-codex/gpt-5.5:high"), ("openai-codex", None))
 
     def test_ollama_style_tag_is_not_a_thinking_suffix(self):
         self.assertEqual(review_branch.strip_thinking_suffix("qwen3.8:27b"), "qwen3.8:27b")
 
     def test_bare_id_is_looked_up_in_models_json(self):
-        self.assertEqual(
-            review_branch.resolve_provider("qwen3.8:27b", {}, OLLAMA_MODELS), "ollama"
-        )
+        self.assertEqual(self.endpoint("qwen3.8:27b"), ("ollama", "http://127.0.0.1:11434/v1"))
 
-    def test_unknown_bare_id_has_no_provider(self):
-        self.assertIsNone(review_branch.resolve_provider("gpt-5.5", {}, OLLAMA_MODELS))
+    def test_slash_in_a_model_id_is_not_a_provider_prefix(self):
+        # `hf.co` is not a provider; the id belongs to ollama.
+        self.assertEqual(self.endpoint("hf.co/user/repo"), ("ollama", "http://127.0.0.1:11434/v1"))
 
-    def test_no_model_falls_back_to_pi_default_provider(self):
-        settings = {"defaultProvider": "ollama", "defaultModel": "qwen3.8:27b"}
-        self.assertEqual(review_branch.resolve_provider(None, settings, OLLAMA_MODELS), "ollama")
+    def test_id_after_a_declared_prefix_keeps_its_slashes(self):
+        self.assertEqual(self.endpoint("openrouter/moonshotai/kimi-k2.6"),
+                         ("openrouter", "https://openrouter.ai/api/v1"))
+
+    def test_per_model_base_url_overrides_the_provider(self):
+        self.assertEqual(self.endpoint("openai/local-proxy"), ("openai", "http://127.0.0.1:8080/v1"))
+
+    def test_unknown_bare_id_falls_back_to_the_default_provider(self):
+        self.assertEqual(self.endpoint("gpt-5.5"), ("ollama", None))
+
+    def test_no_model_uses_pi_default_model(self):
+        self.assertEqual(self.endpoint(None), ("ollama", "http://127.0.0.1:11434/v1"))
+
+    def test_no_default_model_still_uses_the_default_provider(self):
+        self.assertEqual(self.endpoint(None, {"defaultProvider": "ollama"}),
+                         ("ollama", "http://127.0.0.1:11434/v1"))
 
 
 class IsSelfHostedUrl(unittest.TestCase):
@@ -82,9 +99,7 @@ class ResolveJobs(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         agent_dir = Path(self.tmp.name)
         (agent_dir / "models.json").write_text(json.dumps(OLLAMA_MODELS))
-        (agent_dir / "settings.json").write_text(
-            json.dumps({"defaultProvider": "ollama", "defaultModel": "qwen3.8:27b"})
-        )
+        (agent_dir / "settings.json").write_text(json.dumps(PI_SETTINGS))
         self.env = unittest.mock.patch.dict(
             "os.environ", {review_branch.PI_AGENT_DIR_ENV: str(agent_dir)}
         )
@@ -105,6 +120,14 @@ class ResolveJobs(unittest.TestCase):
     def test_declared_hosted_provider_keeps_full_fan_out(self):
         jobs, _ = review_branch.resolve_jobs(3, "openrouter/moonshotai/kimi-k2.6")
         self.assertEqual(jobs, 3)
+
+    def test_model_pinned_to_a_local_endpoint_serializes(self):
+        jobs, _ = review_branch.resolve_jobs(3, "openai/local-proxy")
+        self.assertEqual(jobs, 1)
+
+    def test_slashed_local_model_id_serializes(self):
+        jobs, _ = review_branch.resolve_jobs(3, "hf.co/user/repo")
+        self.assertEqual(jobs, 1)
 
     def test_missing_pi_config_assumes_hosted(self):
         with unittest.mock.patch.dict("os.environ", {review_branch.PI_AGENT_DIR_ENV: "/nonexistent"}):
