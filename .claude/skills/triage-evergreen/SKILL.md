@@ -32,7 +32,7 @@ Before writing a *behavioral* fix, state the causal chain in one sentence: *`<ca
 
 Read [merge-patterns.md](merge-patterns.md) — an analysis of past evergreen PRs and why the owner merged or closed each. It distills what separates merged from rejected PRs (root cause at the right layer, smallest sufficient fix, proven-live bug, additive field semantics, code-PR vs. Discord-alert). Use it to sanity-check your plan before you build.
 
-- Create a fresh branch off of `origin/master` (fetch first) so the PR is clean and doesn't carry unrelated changes.
+- Create a fresh branch off the repo's default branch (`git fetch origin && git remote set-head origin --auto && git symbolic-ref --short refs/remotes/origin/HEAD` — it is not `origin/master` everywhere, and a cached `origin/HEAD` can be stale) so the PR is clean and doesn't carry unrelated changes.
 - **Every evergreen PR must carry the `evergreen` GitHub label** so the owner can spot at a glance that it came from evergreen. The label may not exist in the target repo yet, so ensure it exists first, then apply it when you open the PR:
 
   ```
@@ -59,7 +59,7 @@ If you can't give him a clear path to see the problem firsthand, the PR isn't re
 
 ## After opening a PR
 
-Review the branch: `python3 scripts/review-branch.py --dir <project path> --branch <your branch>` (run from the evergreen repo). It runs pi review agents over the diff vs `origin/master` and prints their findings. Evaluate each, fix any that are valid — push follow-up commits to the same branch — then re-run tests and typecheck. Repeat until the review surfaces no new valid findings or you've done 3 cycles.
+Review the branch: `python3 scripts/review-branch.py --dir <project path> --branch <your branch>` (run from the evergreen repo). It runs pi review agents over the diff vs the repo's default branch (`origin/HEAD`) and prints their findings. Evaluate each, fix any that are valid — push follow-up commits to the same branch — then re-run tests and typecheck. Repeat until the review surfaces no new valid findings or you've done 3 cycles.
 
 **Do not send the PR-ready Discord notification until after the review cycle is complete.** The PR should be in good shape before you ping anyone *about the PR*. (Exception: an active-outage heads-up — see Notification judgment — goes out immediately when the outage is detected and is never delayed for the review or for PR prep. That is a separate message from the later "here's the PR" ping.)
 
