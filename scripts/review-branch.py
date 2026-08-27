@@ -256,7 +256,9 @@ def main():
 
     # Make sure the base is current and the branch is checked out before reviewing.
     remote = args.base.split("/", 1)[0] if args.base and "/" in args.base else "origin"
-    run(["git", "fetch", remote], cwd=args.dir, timeout=120)
+    fetched = run(["git", "fetch", remote], cwd=args.dir, timeout=120)
+    if fetched.returncode != 0:
+        sys.exit(f"git fetch {remote} failed in {args.dir}; the base ref would be stale:\n{fetched.stderr.strip()}")
     args.base = resolve_base(args.dir, args.base)
     co = run(["git", "checkout", args.branch], cwd=args.dir, timeout=60)
     if co.returncode != 0:

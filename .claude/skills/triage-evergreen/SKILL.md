@@ -32,7 +32,7 @@ Before writing a *behavioral* fix, state the causal chain in one sentence: *`<ca
 
 Read [merge-patterns.md](merge-patterns.md) — an analysis of past evergreen PRs and why the owner merged or closed each. It distills what separates merged from rejected PRs (root cause at the right layer, smallest sufficient fix, proven-live bug, additive field semantics, code-PR vs. Discord-alert). Use it to sanity-check your plan before you build.
 
-- Create a fresh branch off of `origin/master` (fetch first) so the PR is clean and doesn't carry unrelated changes.
+- Create a fresh branch off the repo's default branch (`git fetch origin && git symbolic-ref --short refs/remotes/origin/HEAD` — it is not `origin/master` everywhere) so the PR is clean and doesn't carry unrelated changes.
 - **Every evergreen PR must carry the `evergreen` GitHub label** so the owner can spot at a glance that it came from evergreen. The label may not exist in the target repo yet, so ensure it exists first, then apply it when you open the PR:
 
   ```
