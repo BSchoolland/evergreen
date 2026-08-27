@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Review a branch's changes with pi review agents.
 
-Diffs <branch> against the base branch (default origin/master) inside <dir> and
-runs one or more pi agents that read the diff plus surrounding code and report
-findings. Prints the combined review to stdout. Read-only: the reviewers may run
-git and read files, but never edit the repo.
+Diffs <branch> against the base branch inside <dir> and runs one or more pi
+agents that read the diff plus surrounding code and report findings. The base
+defaults to the repo's own default branch, read from origin/HEAD. Prints the
+combined review to stdout. Read-only: the reviewers may run git and read files,
+but never edit the repo.
 
 Each review lens is recorded in Evergreen's `runs` table with its Pi cost/tokens.
 When the script runs inside a skill invocation, `EVERGREEN_RUN_ID` links the
 review batch back to the parent triage run; PR URL and branch are recorded too.
 
 Usage:
-  review-branch.py --dir /path/to/repo --branch my-branch [--base origin/master]
+  review-branch.py --dir /path/to/repo --branch my-branch [--base origin/main]
   review-branch.py --dir /path/to/repo --branch my-branch --lens correctness,security
 """
 
@@ -151,6 +152,22 @@ def read_session_metrics(session_dir: Path) -> tuple[float | None, int | None, s
         return None, None, None, None
 
 
+def resolve_base(dir_: str, base: str | None) -> str:
+    """Return a base ref that is guaranteed to resolve in dir_, or exit."""
+    if base is None:
+        head = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=dir_, timeout=20)
+        if head.returncode != 0:
+            sys.exit(
+                f"Could not read origin/HEAD in {dir_} to pick a default base ref "
+                f"(git: {head.stderr.strip()}). Run `git remote set-head origin --auto` "
+                f"there, or pass --base explicitly."
+            )
+        base = head.stdout.strip()
+    if run(["git", "rev-parse", "--verify", "-q", f"{base}^{{commit}}"], cwd=dir_, timeout=20).returncode != 0:
+        sys.exit(f"Base ref {base!r} does not resolve in {dir_}; the review would diff against nothing.")
+    return base
+
+
 def review(dir_: str, branch: str, base: str, name: str, model: str | None,
            thinking: str | None, session_dir: Path, batch_run_id: int | None,
            pr_url: str | None) -> ReviewResult:
@@ -215,7 +232,8 @@ def main():
     p = argparse.ArgumentParser(description="Review a branch's changes with pi agents")
     p.add_argument("--dir", required=True, help="Path to the repo to review")
     p.add_argument("--branch", required=True, help="Branch to review")
-    p.add_argument("--base", default="origin/master", help="Base ref to diff against")
+    p.add_argument("--base", default=None,
+                   help="Base ref to diff against (default: the repo's default branch via origin/HEAD)")
     p.add_argument("--lens", default="correctness,logging,security",
                    help="Comma-separated lenses: " + ", ".join(LENSES))
     p.add_argument("--model", help="pi model override (default: pi's configured model)")
@@ -237,8 +255,9 @@ def main():
     cleanup_old_sessions(REVIEW_SESSION_ROOT, args.keep_session_days)
 
     # Make sure the base is current and the branch is checked out before reviewing.
-    remote = args.base.split("/", 1)[0] if "/" in args.base else "origin"
+    remote = args.base.split("/", 1)[0] if args.base and "/" in args.base else "origin"
     run(["git", "fetch", remote], cwd=args.dir, timeout=120)
+    args.base = resolve_base(args.dir, args.base)
     co = run(["git", "checkout", args.branch], cwd=args.dir, timeout=60)
     if co.returncode != 0:
         sys.exit(f"Could not check out {args.branch} in {args.dir}:\n{co.stderr.strip()}")
