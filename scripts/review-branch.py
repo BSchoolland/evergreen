@@ -155,12 +155,19 @@ def read_session_metrics(session_dir: Path) -> tuple[float | None, int | None, s
 def resolve_base(dir_: str, base: str | None) -> str:
     """Return a base ref that is guaranteed to resolve in dir_, or exit."""
     if base is None:
+        # `git fetch` only creates origin/HEAD when it is missing; it will not correct
+        # one left stale by a default-branch rename. Re-read it from the remote.
+        sethead = run(["git", "remote", "set-head", "origin", "--auto"], cwd=dir_, timeout=60)
+        if sethead.returncode != 0:
+            sys.exit(
+                f"Could not read the default branch from origin in {dir_} "
+                f"(git: {sethead.stderr.strip()}); pass --base explicitly."
+            )
         head = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=dir_, timeout=20)
         if head.returncode != 0:
             sys.exit(
                 f"Could not read origin/HEAD in {dir_} to pick a default base ref "
-                f"(git: {head.stderr.strip()}). Run `git remote set-head origin --auto` "
-                f"there, or pass --base explicitly."
+                f"(git: {head.stderr.strip()}); pass --base explicitly."
             )
         base = head.stdout.strip()
     if run(["git", "rev-parse", "--verify", "-q", f"{base}^{{commit}}"], cwd=dir_, timeout=20).returncode != 0:
